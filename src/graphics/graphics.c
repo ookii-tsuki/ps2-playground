@@ -43,7 +43,6 @@ int main(int argc, char *argv[]) {
         // Sync and flip the frame
         gsKit_sync_flip(gsGlobal);
         gsKit_queue_exec(gsGlobal);
-        gsKit_vsync_wait();
     }
 
     return 0;
