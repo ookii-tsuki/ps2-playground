@@ -6,7 +6,8 @@
                 "${workspaceFolder}/**",
                 "/usr/local/ps2dev/ps2sdk/ee/include",  // Path to EE includes
                 "/usr/local/ps2dev/ps2sdk/common/include",  // Path to common includes
-                "/usr/local/ps2dev/ps2sdk/iop/include"  // Path to IOP includes
+                "/usr/local/ps2dev/ps2sdk/iop/include",  // Path to IOP includes
+                "/usr/local/ps2dev/gsKit/include"
             ],
             "defines": ["PS2_EE"],
             "compilerPath": "/usr/local/ps2dev/ee/bin/mips64r5900el-ps2-elf-gcc",  // Path to EE GCC compiler
@@ -18,7 +19,8 @@
                     "${workspaceFolder}",
                     "/usr/local/ps2dev/ps2sdk/ee/include",
                     "/usr/local/ps2dev/ps2sdk/common/include",
-                    "/usr/local/ps2dev/ps2sdk/iop/include"
+                    "/usr/local/ps2dev/ps2sdk/iop/include",
+                    "/usr/local/ps2dev/gsKit/include"
                 ],
                 "limitSymbolsToIncludedHeaders": true,
                 "databaseFilename": ""

@@ -2,13 +2,24 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build PS2 ELF",
+            "label": "Build All",
             "type": "shell",
             "command": "make",
             "group": {
                 "kind": "build",
-                "isDefault": true
             }
+        },
+        {
+            "label": "Build Hello",
+            "type": "shell",
+            "command": "make program=hello",
+            "group": "build"
+        },
+        {
+            "label": "Build Graphics",
+            "type": "shell",
+            "command": "make program=graphics",
+            "group": "build"
         }
     ]
 }

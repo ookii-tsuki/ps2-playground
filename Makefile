@@ -1,15 +1,19 @@
-# PS2 SDK tools
-EE_BIN = hello.elf
-EE_OBJS = hello.o
-EE_LIBS = -ldebug -lkernel
+PROGRAMS = hello graphics
 
-# Add PS2SDK includes
-EE_INCS += -I$(PS2SDK)/ee/include -I$(PS2SDK)/common/include
+ifdef program
+all:
+	$(MAKE) -C src/$(program)
 
-# Use default rules from PS2SDK
-include $(PS2SDK)/samples/Makefile.pref
-include $(PS2SDK)/samples/Makefile.eeglobal
-
-# Clean target
 clean:
-	rm -f $(EE_BIN) $(EE_OBJS)
+	$(MAKE) -C src/$(program) clean
+else
+all:
+	@for prog in $(PROGRAMS); do \
+		$(MAKE) -C src/$$prog; \
+	done
+
+clean:
+	@for prog in $(PROGRAMS); do \
+		$(MAKE) -C src/$$prog clean; \
+	done
+endif
