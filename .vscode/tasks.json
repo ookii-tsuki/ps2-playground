@@ -20,6 +20,12 @@
             "type": "shell",
             "command": "make program=graphics",
             "group": "build"
+        },
+        {
+            "label": "Build Vector Unit 0",
+            "type": "shell",
+            "command": "make program=vector_unit0",
+            "group": "build"
         }
     ]
 }

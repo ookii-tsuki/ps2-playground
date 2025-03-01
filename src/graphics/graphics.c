@@ -1,10 +1,13 @@
+#include <tamtypes.h>
+#include <kernel.h>
 #include <gsKit.h>
 #include <dmaKit.h>
-#include <gsToolkit.h>
-#include <time.h>
-#include <stdint.h>
+#include <math3d.h>
 
+#include <stdint.h>
 typedef uint64_t u64;
+
+
 
 int main(int argc, char *argv[]) {
     // Initialize DMA and GS
