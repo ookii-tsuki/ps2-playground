@@ -1,4 +1,4 @@
-PROGRAMS = hello graphics
+PROGRAMS = hello graphics graphics1 vu0
 
 ifdef program
 all:

@@ -22,6 +22,12 @@
             "group": "build"
         },
         {
+            "label": "Build Graphics 1",
+            "type": "shell",
+            "command": "make program=graphics1",
+            "group": "build"
+        },
+        {
             "label": "Build Vector Unit 0",
             "type": "shell",
             "command": "make program=vector_unit0",
