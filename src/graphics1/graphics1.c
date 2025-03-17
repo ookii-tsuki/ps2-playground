@@ -11,11 +11,14 @@
 #include <string.h>
 #include <malloc.h>
 #include <math3d.h>
+#include <model.h>
 
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 448
 
-#define DRAWBUF_SIZE 100
+#define DRAWBUF_SIZE 20000
+
+#define MESH_FILE "host:monkey.bin"
 
 int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	
@@ -65,20 +68,9 @@ VECTOR tri_pos = {0.0f, 0.0f, 0.0f, 1.0f};
 VECTOR tri_rot = {0.0f, 0.0f, 0.0f, 1.0f};
 VECTOR tri_scale = {10.0f, 10.0f, 10.0f, 1.0f};
 
-VECTOR cam_pos = {0.0f, 0.0f, 50.0f, 1.0f};
+VECTOR cam_pos = {0.0f, 0.0f, 100.0f, 1.0f};
 VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
 
-vertex_f_t tri_verts[3] = {
-    {{0.0f, 0.0f, 0.0f, 1.0f}},
-    {{1.0f, 0.0f, 0.0f, 1.0f}},
-    {{0.0f, 1.0f, 0.0f, 1.0f}}
-};
-
-color_f_t tri_colors[3] = {
-    {{1.0f, 0.0f, 0.0f, 1.0f}},
-    {{0.0f, 1.0f, 0.0f, 1.0f}},
-    {{0.0f, 0.0f, 1.0f, 1.0f}}
-};
 
 int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	
@@ -87,6 +79,8 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	packet_t *packets[2];
 	packet_t *current;
 	qword_t *dmatag;
+
+	mesh_t *mesh = load_model(MESH_FILE);
             
 	packets[0] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
 	packets[1] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
@@ -94,10 +88,10 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	MATRIX local_world, view_screen, world_view, local_screen;
 
 	// calculation space
-	vertex_f_t *temp_verts = memalign(128, sizeof(vertex_f_t) * 3);
+	vertex_f_t *temp_verts = memalign(128, sizeof(vertex_f_t) * mesh->vertex_count);
 
-	xyz_t *screen_verts = memalign(128, sizeof(xyz_t) * 3);
-	color_t *colors = memalign(128, sizeof(color_t) * 3);
+	xyz_t *screen_verts = memalign(128, sizeof(xyz_t) * mesh->vertex_count);
+	color_t *colors = memalign(128, sizeof(color_t) * mesh->vertex_count);
 
 	prim_t prim;
 
@@ -131,7 +125,6 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 		current = packets[ctx];
 		dmatag = current->data;
 
-		tri_rot[0] += 0.01f;
 		tri_rot[1] += 0.01f;
 
 		create_local_world(local_world, tri_pos, tri_rot);
@@ -141,11 +134,11 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
 		create_local_screen(local_screen, local_world, world_view, view_screen);
 
-		calculate_vertices((VECTOR*)temp_verts, 3, (VECTOR*)tri_verts, local_screen);
+		calculate_vertices((VECTOR*)temp_verts, mesh->vertex_count, (VECTOR*)mesh->vertices, local_screen);
 
-		draw_convert_xyz(screen_verts, 2048, 2048, 32, 3, temp_verts);
+		draw_convert_xyz(screen_verts, 2048, 2048, 32, mesh->vertex_count, temp_verts);
 
-		draw_convert_rgbq(colors, 3, temp_verts, tri_colors, 255);
+		draw_convert_rgbq(colors, mesh->vertex_count, temp_verts, mesh->colors, 255);
 
 
 		qword_t *q = dmatag;
@@ -157,10 +150,10 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
 		q = draw_prim_start(q, 0, &prim, &color);
 
-		for (i = 0; i < 3; i++)
+		for (i = 0; i < mesh->index_count; i++)
 		{
-			q->dw[0] = colors[i].rgbaq;
-			q->dw[1] = screen_verts[i].xyz;
+			q->dw[0] = colors[mesh->indices[i]].rgbaq;
+			q->dw[1] = screen_verts[mesh->indices[i]].xyz;
 			q++;
 		}
 
