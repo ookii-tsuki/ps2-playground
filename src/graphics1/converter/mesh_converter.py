@@ -354,32 +354,49 @@ class PS2ModelGenerator:
     
     @staticmethod
     def _write_model_file(output_file, data, texture_file):
-        """Write the model data to a file."""
+        """Write the model data to a file with limited float precision."""
+        # Define precision for floating point values
+        # PS2 doesn't need more than 4-6 decimal places
+        precision = 6
+        
         with open(output_file, 'w') as f:
             # Write indices
             f.write(f"{len(data['indices']) * 3}\n")  # Total number of indices
             for idx in data['indices']:
                 f.write(f"{idx[0]},{idx[1]},{idx[2]}\n")
             
-            # Write aligned vertices
+            # Write aligned vertices with limited precision
             f.write(f"{len(data['vertices'])}\n")  # Vertex count
             for vertex in data['vertices']:
-                f.write(f"{vertex[0]},{vertex[1]},{vertex[2]},{vertex[3]}\n")
+                # Format with limited precision
+                vx = round(vertex[0], precision)
+                vy = round(vertex[1], precision)
+                vz = round(vertex[2], precision)
+                vw = round(vertex[3], precision)
+                f.write(f"{vx},{vy},{vz},{vw}\n")
             
-            # Write aligned colors
+            # Write aligned colors with limited precision
             f.write(f"{len(data['colors'])}\n")  # Color count
             for color in data['colors']:
-                f.write(f"{color[0]},{color[1]},{color[2]},{color[3]}\n")
+                # Format with limited precision
+                r = round(color[0], precision)
+                g = round(color[1], precision)
+                b = round(color[2], precision)
+                a = round(color[3], precision)
+                f.write(f"{r},{g},{b},{a}\n")
             
-            # Write aligned texture coordinates
+            # Write aligned texture coordinates with limited precision
             f.write(f"{len(data['texcoords'])}\n")  # Texcoord count
             for texcoord in data['texcoords']:
                 # Ensure coordinates are in 0-1 range
                 s = max(0.0, min(1.0, texcoord[0]))
                 t = max(0.0, min(1.0, texcoord[1]))
+                # Round to limited precision
+                s = round(s, precision)
+                t = round(t, precision)
                 # Flip Y coordinate
-                t_flipped = 1.0 - t
-                # Write to file
+                t_flipped = round(1.0 - t, precision)
+                # Write to file with zeros for R and Q
                 f.write(f"{s},{t_flipped},0.0,0.0\n")
             
             # Write texture data if available
