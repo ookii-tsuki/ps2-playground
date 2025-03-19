@@ -9,7 +9,7 @@ typedef struct {
     int psm;
     int texture_size; // Size of the texture data in bytes
     void* texture_data; // Pointer to raw texture data
-} __attribute__((packed,aligned(16))) texture_t;
+} __attribute__((packed,aligned(8))) texture_t;
 
 typedef struct {
     int index_count;
