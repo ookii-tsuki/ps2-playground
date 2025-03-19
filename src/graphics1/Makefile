@@ -1,6 +1,6 @@
 # PS2 SDK tools
 EE_BIN = graphics1.elf
-EE_OBJS = graphics1.o model.o
+EE_OBJS = graphics1.o model.o clut.o
 EE_LIBS = -ldma -lgraph -ldraw -ldebug -lkernel -lpacket -lmath3d
 
 # Add PS2SDK includes

@@ -165,7 +165,7 @@ mesh_t* load_model(const char* filename) {
         model->texture->texture_size = texture_size;
         
         // Allocate memory for texture data
-        model->texture->texture_data = memalign(16, texture_size);
+        model->texture->texture_data = memalign(128, texture_size);
         if (!model->texture->texture_data) {
             perror("Failed to allocate memory for texture data");
             free_model(model);
@@ -225,6 +225,83 @@ mesh_t* load_model(const char* filename) {
                 
                 data[i] = pixel;
             }
+        } else if (psm == GS_PSM_8) { // GS_PSM_8 (8-bit indexed, requires CLUT)
+            u32 index;
+            u8* data = (u8*)model->texture->texture_data;
+            
+            for (int i = 0; i < width * height; i++) {
+                if (fscanf(file, "%x", &index) != 1) {
+                    printf("Error: Failed to read texture data (8-bit indexed format)\n");
+                    free_model(model);
+                    fclose(file);
+                    return NULL;
+                }
+                
+                // Ensure index is in range for 8-bit
+                if (index > 0xFF) {
+                    printf("Warning: 8-bit index out of range (%u), clamping to 255\n", index);
+                    index = 0xFF;
+                }
+
+
+                // Swizzle the index to match PS2 CLUT format for IDTEX8
+                
+                u8 high_nibble = index >> 4;
+                u8 low_nibble = index & 0x0F;
+
+                u8 row = (high_nibble >> 1) * 2 + (low_nibble >> 3);
+                u8 col = (high_nibble & 1) * 8 + (low_nibble & 7);
+                
+                data[i] = row * 16 + col;
+            }
+            
+            printf("Loaded 8-bit indexed texture with %d pixels\n", width * height);
+        } else if (psm == GS_PSM_4) { // GS_PSM_4 (4-bit indexed, requires CLUT)
+            unsigned int index;
+            unsigned char* data = (unsigned char*)model->texture->texture_data;
+            
+            // For 4-bit textures, we pack two indices per byte
+            for (int i = 0; i < width * height; i += 2) {
+                // Read first index
+                if (fscanf(file, "%x", &index) != 1) {
+                    printf("Error: Failed to read texture data (4-bit indexed format)\n");
+                    free_model(model);
+                    fclose(file);
+                    return NULL;
+                }
+                
+                // Ensure index is in range for 4-bit
+                if (index > 0xF) {
+                    printf("Warning: 4-bit index out of range (%u), clamping to 15\n", index);
+                    index = 0xF;
+                }
+                
+                // Store first index in the upper 4 bits
+                unsigned char packed = (index & 0xF) << 4;
+                
+                // If we have a second pixel, read and store it in lower 4 bits
+                if (i + 1 < width * height) {
+                    if (fscanf(file, "%x", &index) != 1) {
+                        printf("Error: Failed to read texture data (4-bit indexed format)\n");
+                        free_model(model);
+                        fclose(file);
+                        return NULL;
+                    }
+                    
+                    // Ensure index is in range for 4-bit
+                    if (index > 0xF) {
+                        printf("Warning: 4-bit index out of range (%u), clamping to 15\n", index);
+                        index = 0xF;
+                    }
+                    
+                    // Pack second index in the lower 4 bits
+                    packed |= (index & 0xF);
+                }
+                
+                data[i/2] = packed;
+            }
+            
+            printf("Loaded 4-bit indexed texture with %d pixels\n", width * height);
         } else {
             printf("Warning: Unsupported texture format (PSM = %d). Skipping texture data.\n", psm);
             free(model->texture->texture_data);

@@ -12,6 +12,7 @@
 #include <malloc.h>
 #include <math3d.h>
 #include <model.h>
+#include <clut.h>
 
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 448
@@ -65,29 +66,68 @@ int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
 }
 
 
-void load_texture(texbuffer_t *texbuf, texture_t *texture) {
-	
-	// allocate video memory for the texture
-	texbuf->width = texture->width;
-	texbuf->psm = texture->psm;
-	texbuf->address = graph_vram_allocate(texture->width, texture->height, texbuf->psm, GRAPH_ALIGN_BLOCK);
-	
-	packet_t *packet = packet_init(50, PACKET_NORMAL);
-	
-	qword_t *q = packet->data;
+void load_texture(texbuffer_t *texbuf, clutbuffer_t *clutbuf, texture_t *texture, clut_t *clut) {
+    // Check if this is a CLUT texture
+    if (texture->psm == GS_PSM_4 || texture->psm == GS_PSM_8) {
+        // allocate video memory for the texture (indexed format uses less space)
+        texbuf->width = texture->width;
+        texbuf->psm = texture->psm;
+        texbuf->address = graph_vram_allocate(texture->width, texture->height, texbuf->psm, GRAPH_ALIGN_BLOCK);
+        
+		clutbuf->start = 0;
+		clutbuf->storage_mode = CLUT_STORAGE_MODE1;
+		clutbuf->load_method = CLUT_LOAD;
+		clutbuf->psm = GS_PSM_32;
 
-	q = draw_texture_transfer(q, texture->texture_data, texture->width, texture->height, texbuf->psm, texbuf->address, texbuf->width);
+		int clut_width = texture->psm == GS_PSM_4 ? 8 : 16;
+		int clut_height = texture->psm == GS_PSM_4 ? 2 : 16;
 
-	q = draw_texture_flush(q);
+        // Allocate VRAM for the CLUT
+        clutbuf->address = graph_vram_allocate(clut_width, clut_height, clutbuf->psm, GRAPH_ALIGN_BLOCK);
+        
+        packet_t *packet = packet_init(50, PACKET_NORMAL);
+        qword_t *q = packet->data;
+        
+        // Transfer texture data (indexed pixels)
+        q = draw_texture_transfer(q, texture->texture_data, texture->width, texture->height, 
+                                  texbuf->psm, texbuf->address, texbuf->width);
+        
+        // Transfer CLUT data
+        q = draw_texture_transfer(q, clut->palette, clut_width, clut_height,
+                                 GS_PSM_32, clutbuf->address, 64);
+        
+        q = draw_texture_flush(q);
+        
+        dma_channel_send_chain(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
+        dma_wait_fast();
+        packet_free(packet);
+    } else {
+        texbuf->width = texture->width;
+        texbuf->psm = texture->psm;
+        texbuf->address = graph_vram_allocate(texture->width, texture->height, texbuf->psm, GRAPH_ALIGN_BLOCK);
+        
+		clutbuf->address = 0;
+		clutbuf->start = 0;
+		clutbuf->storage_mode = CLUT_STORAGE_MODE1;
+		clutbuf->load_method = CLUT_NO_LOAD;
+		clutbuf->psm = 0;
 
-	dma_channel_send_chain(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
-
-	dma_wait_fast();
-
-	packet_free(packet);
+        packet_t *packet = packet_init(50, PACKET_NORMAL);
+        qword_t *q = packet->data;
+        
+        q = draw_texture_transfer(q, texture->texture_data, texture->width, texture->height, 
+                                 texbuf->psm, texbuf->address, texbuf->width);
+        
+        q = draw_texture_flush(q);
+        
+        dma_channel_send_chain(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
+        dma_wait_fast();
+        packet_free(packet);
+        
+	}
 }
 
-void setup_texture(texbuffer_t *texbuf) {
+void setup_texture(texbuffer_t *texbuf, clutbuffer_t *clutbuf) {
 	
 	packet_t *packet = packet_init(16, PACKET_NORMAL);
 
@@ -107,18 +147,10 @@ void setup_texture(texbuffer_t *texbuf) {
 	texbuf->info.components = TEXTURE_COMPONENTS_RGB;
 	texbuf->info.function = TEXTURE_FUNCTION_DECAL;
 
-	clutbuffer_t clutbuf;
-
-	clutbuf.address = 0;
-	clutbuf.start = 0;
-	clutbuf.storage_mode = CLUT_STORAGE_MODE1;
-	clutbuf.load_method = CLUT_NO_LOAD;
-	clutbuf.psm = 0;
-
 
 	q = draw_texture_sampling(q, 0, &lod);
 
-	q = draw_texturebuffer(q, 0, texbuf, &clutbuf);
+	q = draw_texturebuffer(q, 0, texbuf, clutbuf);
 
 	dma_channel_send_normal(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
 
@@ -265,12 +297,14 @@ int main(void) {
 	framebuffer_t framebuf;
 	zbuffer_t zbuf;
 	texbuffer_t texbuf;
+	clutbuffer_t clutbuf;
 
 	init_gs(&framebuf, &zbuf, &texbuf);
 
 	printf("Loading model...\n");
 	mesh_t *mesh = load_model(MESH_FILE);
 
+	
 	if (!mesh) {
 		printf("FATAL: Failed to load model\n");
 		return -1;
@@ -278,8 +312,10 @@ int main(void) {
 
 	printf("Loading texture...\n");
 
-	load_texture(&texbuf, mesh->texture);
-	setup_texture(&texbuf);
+	clut_t *clut = load_clut("host:car.clt");
+
+	load_texture(&texbuf, &clutbuf, mesh->texture, clut);
+	setup_texture(&texbuf, &clutbuf);
 
 	printf("Drawing...\n");
 

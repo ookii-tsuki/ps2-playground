@@ -306,7 +306,7 @@ class PS2ModelGenerator:
     @staticmethod
     def find_texture_file(materials, output_file, active_material=None, force_texture=None):
         """Find the appropriate texture file to use."""
-        if force_texture:
+        if (force_texture):
             return force_texture if os.path.exists(force_texture) else None
         
         texture_file = None
@@ -327,7 +327,7 @@ class PS2ModelGenerator:
         return texture_file
 
     @staticmethod
-    def write_ps2_model(output_file: str, data: Dict, force_texture: str = None):
+    def write_ps2_model(output_file: str, data: Dict, force_texture: str = None, clut_file: str = None):
         """Write the converted model to a PS2-compatible format."""
         vertices = data['vertices']
         texcoords = data['texcoords']
@@ -350,10 +350,10 @@ class PS2ModelGenerator:
         print(f"Final triangles: {len(aligned_data['indices'])}")
         
         # Write the model file
-        PS2ModelGenerator._write_model_file(output_file, aligned_data, texture_file)
+        PS2ModelGenerator._write_model_file(output_file, aligned_data, texture_file, clut_file)
     
     @staticmethod
-    def _write_model_file(output_file, data, texture_file):
+    def _write_model_file(output_file, data, texture_file, clut_file=None):
         """Write the model data to a file with limited float precision."""
         # Define precision for floating point values
         # PS2 doesn't need more than 4-6 decimal places
@@ -400,48 +400,128 @@ class PS2ModelGenerator:
                 f.write(f"{s},{t_flipped},0.0,0.0\n")
             
             # Write texture data if available
-            PS2ModelGenerator._write_texture_data(f, texture_file)
+            PS2ModelGenerator._write_texture_data(f, texture_file, clut_file)
     
     @staticmethod
-    def _write_texture_data(f, texture_file):
+    def _write_texture_data(f, texture_file, clut_file=None):
         """Write texture data to the model file."""
         if not texture_file or not os.path.exists(texture_file):
             return
             
         try:
             import PIL.Image as Image
+            import numpy as np
             
             # Load the texture image
             img = Image.open(texture_file)
             width, height = img.size
             
-            # Determine best texture format
-            psm, bytes_per_pixel = PS2ModelGenerator.determine_texture_format(img)
+            # Check if we're using a CLUT
+            if clut_file and os.path.exists(clut_file):
+                # Load CLUT file
+                palette, psm = PS2ModelGenerator._load_clut_file(clut_file)
+                if palette is None:
+                    # Fall back to non-indexed if CLUT loading fails
+                    print(f"Warning: Failed to load CLUT, falling back to direct color")
+                    clut_file = None
+                    psm, bytes_per_pixel = PS2ModelGenerator.determine_texture_format(img)
+                else:
+                    # Calculate bytes per pixel based on PSM
+                    bytes_per_pixel = 1 if psm == 0x13 else 0.5  # 8-bit (1 byte) or 4-bit (0.5 byte)
+                    print(f"Using CLUT with PSM=0x{psm:02X}, {len(palette)} colors")
+            else:
+                # No CLUT, use direct color format
+                psm, bytes_per_pixel = PS2ModelGenerator.determine_texture_format(img)
             
             # Convert to appropriate mode based on PSM
-            if psm == 0x00:  # GS_PSM_32
+            if clut_file and (psm == 0x14 or psm == 0x13):  # Indexed modes
+                img = img.convert('RGBA')  # Keep as RGBA for color matching
+            elif psm == 0x00:  # GS_PSM_32
                 img = img.convert('RGBA')
             elif psm == 0x01:  # GS_PSM_24
                 img = img.convert('RGB')
-            elif psm == 0x13:  # GS_PSM_8
+            elif psm == 0x13:  # GS_PSM_8 (grayscale without CLUT)
                 img = img.convert('L')
             
             # Calculate texture size in bytes
-            texture_size = width * height * bytes_per_pixel
+            texture_size = int(width * height * bytes_per_pixel)
             
             # Write texture header (width, height, format, size)
             f.write(f"{width},{height},{psm},{texture_size}\n")
             
             # Write pixel data based on format
             pixels = img.load()
-            PS2ModelGenerator._write_pixels(f, pixels, width, height, psm)
+            
+            if clut_file and palette is not None:
+                # Write indexed texture with CLUT in memory but don't include path
+                PS2ModelGenerator._write_pixels_indexed(f, pixels, width, height, palette, psm)
+            else:
+                # Standard direct color texture
+                PS2ModelGenerator._write_pixels(f, pixels, width, height, psm)
                 
         except ImportError:
             print("Warning: PIL/Pillow library not found, skipping texture export")
             print("Install with: pip install pillow")
         except Exception as e:
             print(f"Error processing texture: {e}")
-    
+            import traceback
+            traceback.print_exc()
+
+    @staticmethod
+    def _write_pixels_indexed(f, pixels, width, height, palette, psm):
+        """Write indexed pixel data for CLUT textures."""
+        # Convert palette to numpy array for faster color matching
+        import numpy as np
+        palette_array = np.array(palette)
+
+        for i, color in enumerate(palette):
+            if color[0] == 90 and color[1] == 45 and color[2] == 34:
+                print(f"Palette color {i}: {color}")
+
+        if psm == 0x14:  # GS_PSM_4 (4-bit indexed, 16 colors)
+            for y in range(height):
+                for x in range(width):
+                    # Get pixel color
+                    if len(pixels[x, y]) == 4:
+                        r, g, b, a = pixels[x, y]
+                    else:
+                        r, g, b = pixels[x, y]
+                        a = 255
+                    
+                    # Find closest color in palette
+                    pixel_color = np.array([r, g, b, a])
+                    # Calculate Euclidean distance to all palette colors
+                    color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
+                    # Get index of closest color
+                    closest_idx = np.argmin(color_distances)
+                    
+                    # Write one index value per line (4-bit value)
+                    f.write(f"{closest_idx:x}\n")
+                    
+        elif psm == 0x13:  # GS_PSM_8 (8-bit indexed, 256 colors)
+            for y in range(height):
+                for x in range(width):
+                    # Get pixel color
+                    if len(pixels[x, y]) == 4:
+                        r, g, b, a = pixels[x, y]
+                    else:
+                        r, g, b = pixels[x, y]
+                        a = 255
+                    
+                    # Find closest color in palette
+                    pixel_color = np.array([r, g, b, a])
+                    # Calculate Euclidean distance to all palette colors
+                    color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
+                    # Get index of closest color
+                    closest_idx = np.argmin(color_distances)
+
+                    if x == 42 and y == 0:
+                        print(f"Pixel color: {r}, {g}, {b}, {a}")
+                        print(f"Closest color: {closest_idx}")
+                
+                    # Write one index value per line (8-bit value)
+                    f.write(f"{closest_idx:02x}\n")
+
     @staticmethod
     def _write_pixels(f, pixels, width, height, psm):
         """Write pixel data based on texture format."""
@@ -459,7 +539,7 @@ class PS2ModelGenerator:
                     r, g, b = pixels[x, y]
                     # RGB packed as a hex value 00RRGGBB
                     hex_value = (r << 16) | (g << 8) | b
-                    f.write(f"{hex_value:08x}\n")
+                    f.write(f"{hex_value:06x}\n")
                     
         elif psm == 0x13:  # GS_PSM_8 (8-bit grayscale)
             for y in range(height):
@@ -467,11 +547,136 @@ class PS2ModelGenerator:
                     l = pixels[x, y]
                     f.write(f"{l:02x}\n")
 
+    @staticmethod
+    def _load_clut_file(clut_file):
+        """Load a CLUT file and extract the palette."""
+        try:
+            with open(clut_file, 'rb') as f:
+                # Read and verify magic identifier
+                magic = f.read(4)
+                if magic != b'CLT\0':
+                    print(f"Error: Invalid CLUT file format (bad magic number)")
+                    return None, None
+                
+                # Read PSM
+                psm = int.from_bytes(f.read(1), byteorder='little')
+                if psm != 0x14 and psm != 0x13:
+                    print(f"Error: Invalid CLUT PSM (must be 0x14 or 0x13, got 0x{psm:02X})")
+                    return None, None
+                
+                # Read color count
+                color_count = int.from_bytes(f.read(2), byteorder='little')
+                
+                # Validate color count
+                max_colors = 16 if psm == 0x14 else 256
+                if color_count > max_colors:
+                    print(f"Warning: CLUT color count ({color_count}) exceeds maximum for PSM 0x{psm:02X} ({max_colors})")
+                    color_count = max_colors
+                
+                # Read color data
+                palette = []
+                for i in range(color_count):
+                    color_bytes = f.read(4)
+                    if len(color_bytes) != 4:
+                        print(f"Error: Failed to read CLUT color data at index {i}")
+                        return None, None
+                    
+                    r, g, b, a = color_bytes
+                    palette.append((r, g, b, a))
+                
+                return palette, psm
+        except Exception as e:
+            print(f"Error loading CLUT file: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None
+
+    @staticmethod
+    def save_reconstructed_texture(texture_file, clut_file, output_path=None):
+        """
+        Reconstruct a texture using CLUT palette and save for debugging purposes.
+        
+        Args:
+            texture_file: Path to original texture
+            clut_file: Path to CLUT file
+            output_path: Path to save reconstructed texture (defaults to original_texture_reconstructed.png)
+        
+        Returns:
+            Path to saved reconstructed texture or None if failed
+        """
+        try:
+            import PIL.Image as Image
+            import numpy as np
+            
+            if not output_path:
+                base_name = os.path.splitext(texture_file)[0]
+                output_path = f"{base_name}_reconstructed.png"
+            
+            # Load the original texture
+            original_img = Image.open(texture_file)
+            width, height = original_img.size
+            
+            # Convert to RGBA for consistent color comparison
+            original_img = original_img.convert('RGBA')
+            original_pixels = original_img.load()
+            
+            # Load CLUT file
+            palette, psm = PS2ModelGenerator._load_clut_file(clut_file)
+            if palette is None:
+                print(f"Error: Failed to load CLUT for reconstruction")
+                return None
+            
+            # Create a new image for the reconstruction
+            reconstructed_img = Image.new('RGBA', (width, height))
+            reconstructed_pixels = reconstructed_img.load()
+            
+            # Convert palette to numpy array for faster color matching
+            palette_array = np.array(palette)
+            
+            # Process each pixel
+            for y in range(height):
+                for x in range(width):
+                    # Get original pixel color
+                    r, g, b, a = original_pixels[x, y]
+                    
+                    # Find closest color in palette
+                    pixel_color = np.array([r, g, b, a])
+                    color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
+                    closest_idx = np.argmin(color_distances)
+                    
+                    # Use the palette color for reconstruction
+                    reconstructed_pixels[x, y] = palette[closest_idx]
+            
+            # Save the reconstructed image
+            reconstructed_img.save(output_path)
+            print(f"Saved reconstructed texture to {output_path}")
+            
+            # Optionally create a side-by-side comparison
+            comparison_path = f"{base_name}_comparison.png"
+            comparison_img = Image.new('RGBA', (width * 2, height))
+            comparison_img.paste(original_img, (0, 0))
+            comparison_img.paste(reconstructed_img, (width, 0))
+            comparison_img.save(comparison_path)
+            print(f"Saved side-by-side comparison to {comparison_path}")
+            
+            return output_path
+            
+        except ImportError:
+            print("Warning: PIL/Pillow library not found, cannot reconstruct texture")
+            print("Install with: pip install pillow")
+            return None
+        except Exception as e:
+            print(f"Error reconstructing texture: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
 def main():
     parser = argparse.ArgumentParser(description='Convert OBJ files to PS2 custom format')
     parser.add_argument('input', help='Input OBJ file')
     parser.add_argument('output', help='Output PS2 model file')
     parser.add_argument('--force-texture', '-t', help='Force specific texture file (overrides MTL)')
+    parser.add_argument('--clut', '-c', help='Use specified CLUT file for indexed textures')
     parser.add_argument('--debug', '-d', action='store_true', help='Enable debug output')
     args = parser.parse_args()
     
@@ -492,7 +697,7 @@ def main():
     )
     
     # Create the PS2 model file
-    PS2ModelGenerator.write_ps2_model(args.output, model_data, args.force_texture)
+    PS2ModelGenerator.write_ps2_model(args.output, model_data, args.force_texture, args.clut)
     
     print(f"Conversion complete! Created {args.output}")
     print(f"  Vertices: {len(model_data['vertices'])}")
@@ -509,6 +714,11 @@ def main():
     
     if texture_file:
         print(f"  Using texture: {texture_file}")
+        
+        # If debugging is enabled and we have a CLUT file, reconstruct the texture
+        if args.debug and args.clut and os.path.exists(args.clut):
+            print("Debug: Reconstructing texture from CLUT palette...")
+            PS2ModelGenerator.save_reconstructed_texture(texture_file, args.clut)
     
     return 0
 
