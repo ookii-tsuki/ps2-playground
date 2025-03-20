@@ -20,37 +20,67 @@ mesh_t* load_model(const char* filename) {
     }
 
     // Initialize pointers to NULL to handle errors safely
-    model->indices = NULL;
+    model->strips = NULL;
     model->vertices = NULL;
     model->colors = NULL;
     model->texcoords = NULL;
     model->texture = NULL;
 
-    fscanf(file, "%d", &model->index_count);
-    if (model->index_count <= 0) {
-        printf("Error: Invalid triangle count in model file\n");
+    // Read number of strips
+    fscanf(file, "%d", &model->strip_count);
+    if (model->strip_count <= 0) {
+        printf("Error: Invalid strip count in model file\n");
         free_model(model);
         fclose(file);
         return NULL;
     }
 
-    model->indices = (int*)memalign(16, model->index_count * sizeof(int));
-    if (!model->indices) {
-        perror("Failed to allocate memory for indices");
+    // Allocate memory for the strips array
+    model->strips = (triangle_strip_t*)memalign(16, model->strip_count * sizeof(triangle_strip_t));
+    if (!model->strips) {
+        perror("Failed to allocate memory for strips");
         free_model(model);
         fclose(file);
         return NULL;
     }
 
-    for (int i = 0; i < model->index_count; i += 3) {
-        if (fscanf(file, "%d,%d,%d", &model->indices[i], &model->indices[i + 1], &model->indices[i + 2]) != 3) {
-            printf("Error: Failed to read triangle indices\n");
+    // Initialize strip indices to NULL
+    for (int i = 0; i < model->strip_count; i++) {
+        model->strips[i].indices = NULL;
+    }
+
+    // Read each strip
+    for (int i = 0; i < model->strip_count; i++) {
+        // Read strip length
+        fscanf(file, "%d", &model->strips[i].length);
+        if (model->strips[i].length <= 0) {
+            printf("Error: Invalid strip length in model file\n");
             free_model(model);
             fclose(file);
             return NULL;
         }
+
+        // Allocate memory for this strip's indices
+        model->strips[i].indices = (int*)memalign(16, model->strips[i].length * sizeof(int));
+        if (!model->strips[i].indices) {
+            perror("Failed to allocate memory for strip indices");
+            free_model(model);
+            fclose(file);
+            return NULL;
+        }
+
+        // Read all indices for this strip
+        for (int j = 0; j < model->strips[i].length; j++) {
+            if (fscanf(file, "%d", &model->strips[i].indices[j]) != 1) {
+                printf("Error: Failed to read strip index\n");
+                free_model(model);
+                fclose(file);
+                return NULL;
+            }
+        }
     }
 
+    // Rest of the model loading remains mostly the same
     fscanf(file, "%d", &model->vertex_count);
     if (model->vertex_count <= 0) {
         printf("Error: Invalid vertex count in model file\n");
@@ -59,6 +89,7 @@ mesh_t* load_model(const char* filename) {
         return NULL;
     }
 
+    // Continue with the rest of the file loading as before...
     model->vertices = (vertex_f_t*)memalign(16, model->vertex_count * sizeof(vertex_f_t));
     if (!model->vertices) {
         perror("Failed to allocate memory for vertices");
@@ -321,7 +352,15 @@ mesh_t* load_model(const char* filename) {
 
 void free_model(mesh_t* model) {
     if (model) {
-        if (model->indices) free(model->indices);
+        if (model->strips) {
+            // Free each strip's indices
+            for (int i = 0; i < model->strip_count; i++) {
+                if (model->strips[i].indices) {
+                    free(model->strips[i].indices);
+                }
+            }
+            free(model->strips);
+        }
         if (model->vertices) free(model->vertices);
         if (model->colors) free(model->colors);
         if (model->texcoords) free(model->texcoords);
@@ -341,18 +380,36 @@ void print_mesh_data(const mesh_t* model) {
     
     printf("Mesh Data Summary:\n");
     printf("=================\n");
-    printf("Indices: %d\n", model->index_count);
+    printf("Triangle Strips: %d\n", model->strip_count);
+    
+    // Calculate total indices across all strips
+    int total_indices = 0;
+    for (int i = 0; i < model->strip_count; i++) {
+        total_indices += model->strips[i].length;
+    }
+    printf("Total Strip Indices: %d\n", total_indices);
+    
     printf("Vertices: %d\n", model->vertex_count);
     printf("Colors: %d\n", model->color_count);
     printf("Texture Coordinates: %d\n", model->texcoord_count);
     
-    // Print first few indices if available
-    if (model->indices && model->index_count > 0) {
-        printf("\nFirst 3 triangles (indices):\n");
-        int count = model->index_count < 9 ? model->index_count : 9;
-        for (int i = 0; i < count; i += 3) {
-            printf("  Triangle %d: [%d, %d, %d]\n", 
-                  i/3, model->indices[i], model->indices[i+1], model->indices[i+2]);
+    // Print first few strips if available
+    if (model->strips && model->strip_count > 0) {
+        printf("\nFirst 3 triangle strips:\n");
+        int strip_count = model->strip_count < 3 ? model->strip_count : 3;
+        for (int i = 0; i < strip_count; i++) {
+            printf("  Strip %d (length %d): [", i, model->strips[i].length);
+            int indices_to_show = model->strips[i].length < 10 ? model->strips[i].length : 10;
+            for (int j = 0; j < indices_to_show; j++) {
+                printf("%d", model->strips[i].indices[j]);
+                if (j < indices_to_show - 1) {
+                    printf(", ");
+                }
+            }
+            if (model->strips[i].length > 10) {
+                printf(", ...");
+            }
+            printf("]\n");
         }
     }
     

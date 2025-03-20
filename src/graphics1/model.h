@@ -12,11 +12,16 @@ typedef struct {
 } __attribute__((packed,aligned(8))) texture_t;
 
 typedef struct {
-    int index_count;
+    int length;     // Number of indices in this strip
+    int* indices;   // Array of indices for this strip
+} __attribute__((packed,aligned(8))) triangle_strip_t;
+
+typedef struct {
+    int strip_count;        // Number of triangle strips
+    triangle_strip_t* strips; // Array of triangle strips
     int vertex_count;
     int color_count;
     int texcoord_count;
-    int* indices;            // Array of indices
     vertex_f_t* vertices;     // Array of vertices
     color_f_t* colors;        // Array of colors
     texel_f_t* texcoords;     // Array of texture coordinates

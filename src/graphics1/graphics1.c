@@ -186,126 +186,133 @@ VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
 
 
 int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
-	
-	int ctx = 0;
+    
+    int ctx = 0;
 
-	packet_t *packets[2];
-	packet_t *current;
-	qword_t *dmatag;
+    packet_t *packets[2];
+    packet_t *current;
+    qword_t *dmatag;
             
-	packets[0] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
-	packets[1] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
+    packets[0] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
+    packets[1] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
 
-	MATRIX local_world, view_screen, world_view, local_screen;
+    MATRIX local_world, view_screen, world_view, local_screen;
 
-	// calculation space
-	vertex_f_t *temp_verts = memalign(128, sizeof(vertex_f_t) * mesh->vertex_count);
+    // calculation space
+    vertex_f_t *temp_verts = memalign(128, sizeof(vertex_f_t) * mesh->vertex_count);
 
-	xyz_t *screen_verts = memalign(128, sizeof(xyz_t) * mesh->vertex_count);
-	color_t *colors = memalign(128, sizeof(color_t) * mesh->vertex_count);
-	texel_t *st = memalign(128, sizeof(texel_t) * mesh->vertex_count);
+    xyz_t *screen_verts = memalign(128, sizeof(xyz_t) * mesh->vertex_count);
+    color_t *colors = memalign(128, sizeof(color_t) * mesh->vertex_count);
+    texel_t *st = memalign(128, sizeof(texel_t) * mesh->vertex_count);
 
-	prim_t prim;
+    prim_t prim;
 
-	prim.type = PRIM_TRIANGLE;
-	prim.shading = PRIM_SHADE_GOURAUD;
-	prim.mapping = DRAW_ENABLE;
-	prim.fogging = DRAW_DISABLE;
-	prim.blending = DRAW_ENABLE;
-	prim.antialiasing = DRAW_DISABLE;
-	prim.mapping_type = PRIM_MAP_ST;
-	prim.colorfix = PRIM_UNFIXED;
+    prim.type = PRIM_TRIANGLE_STRIP;
+    prim.shading = PRIM_SHADE_GOURAUD;
+    prim.mapping = DRAW_ENABLE;
+    prim.fogging = DRAW_DISABLE;
+    prim.blending = DRAW_ENABLE;
+    prim.antialiasing = DRAW_DISABLE;
+    prim.mapping_type = PRIM_MAP_ST;
+    prim.colorfix = PRIM_UNFIXED;
 
-	color_t color = {
-		.r = 255,
-		.g = 255,
-		.b = 255,
-		.a = 255,
-		.q = 1.0f
-	};
+    color_t color = {
+        .r = 255,
+        .g = 255,
+        .b = 255,
+        .a = 255,
+        .q = 1.0f
+    };
 
-	packet_t *flip = packet_init(3, PACKET_UCAB);
+    packet_t *flip = packet_init(3, PACKET_UCAB);
 
-	// set up matrices
+    // set up matrices
 
-	create_view_screen(view_screen, graph_aspect_ratio(), -3.00f, 3.00f, -3.00f, 3.00f, 1.00f, 2000.00f);
+    create_view_screen(view_screen, graph_aspect_ratio(), -3.00f, 3.00f, -3.00f, 3.00f, 1.00f, 2000.00f);
 
-	dma_wait_fast();
+    dma_wait_fast();
 
-	int i;
-	while (1)
-	{
-		current = packets[ctx];
-		dmatag = current->data;
+    int i;
+	int strip_idx;
+	int vertex_idx;
+    while (1)
+    {
+        current = packets[ctx];
+        dmatag = current->data;
 
-		rot[1] += 0.01f;
+        rot[1] += 0.01f;
 
-		create_local_world(local_world, pos, rot);
-		matrix_scale(local_world, local_world, scale);
+        create_local_world(local_world, pos, rot);
+        matrix_scale(local_world, local_world, scale);
 
-		create_world_view(world_view, cam_pos, cam_rot);
+        create_world_view(world_view, cam_pos, cam_rot);
 
-		create_local_screen(local_screen, local_world, world_view, view_screen);
+        create_local_screen(local_screen, local_world, world_view, view_screen);
 
-		calculate_vertices((VECTOR*)temp_verts, mesh->vertex_count, (VECTOR*)mesh->vertices, local_screen);
+        calculate_vertices((VECTOR*)temp_verts, mesh->vertex_count, (VECTOR*)mesh->vertices, local_screen);
 
-		draw_convert_xyz(screen_verts, 2048, 2048, 16, mesh->vertex_count, temp_verts);
+        draw_convert_xyz(screen_verts, 2048, 2048, 16, mesh->vertex_count, temp_verts);
 
-		draw_convert_rgbq(colors, mesh->vertex_count, temp_verts, mesh->colors, 255);
+        draw_convert_rgbq(colors, mesh->vertex_count, temp_verts, mesh->colors, 255);
 
-		draw_convert_st(st, mesh->vertex_count, temp_verts, mesh->texcoords);
+        draw_convert_st(st, mesh->vertex_count, temp_verts, mesh->texcoords);
 
-		qword_t *q = dmatag;
-		q++; // skip the header
+        qword_t *q = dmatag;
+        q++; // skip the header
 
-		q = draw_disable_tests(q, 0, zbuf);
-		q = draw_clear(q, 0, 2048.0f - (SCREEN_WIDTH/2), 2048.0f - (SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 20, 20, 20);
-		q = draw_enable_tests(q, 0, zbuf);
+        q = draw_disable_tests(q, 0, zbuf);
+        q = draw_clear(q, 0, 2048.0f - (SCREEN_WIDTH/2), 2048.0f - (SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 20, 20, 20);
+        q = draw_enable_tests(q, 0, zbuf);
 
-		u64 *dw = (u64*)draw_prim_start(q, 0, &prim, &color);
+        // Process each triangle strip separately
+        for (strip_idx = 0; strip_idx < mesh->strip_count; strip_idx++) {
+            triangle_strip_t* strip = &mesh->strips[strip_idx];
+            
+            // Start a new primitive for each strip
+            u64 *dw = (u64*)draw_prim_start(q, 0, &prim, &color);
+            
+            // Add all vertices in this strip
+            for (i = 0; i < strip->length; i++) {
+                vertex_idx = strip->indices[i];
+                *dw++ = st[vertex_idx].uv;
+                *dw++ = colors[vertex_idx].rgbaq;
+                *dw++ = screen_verts[vertex_idx].xyz;
+            }
 
-		for (i = 0; i < mesh->index_count; i++)
-		{
-			*dw++ = st[mesh->indices[i]].uv;
-			*dw++ = colors[mesh->indices[i]].rgbaq;
-			*dw++ = screen_verts[mesh->indices[i]].xyz;
-		}
+            // Pad to qword alignment if necessary
+            if ((3 * strip->length) & 1) {
+				*dw++ = 0;
+			}
 
-		if (i % 2)
-		{
-			*dw++ = 0;
-			*dw++ = 0;
-		}
+            // End this strip
+            q = draw_prim_end((qword_t*)dw, 3, DRAW_STQ2_REGLIST);
+        }
 
-		
+        q = draw_finish(q);
 
-		q = draw_prim_end((qword_t*)dw, 3, DRAW_STQ2_REGLIST);
+        DMATAG_END(dmatag,(q-current->data)-1,0,0,0);
 
-		q = draw_finish(q);
+        dma_wait_fast();
+        dma_channel_send_chain(DMA_CHANNEL_GIF, current->data, q - current->data, 0, 0);
 
-		DMATAG_END(dmatag,(q-current->data)-1,0,0,0);
+        draw_wait_finish();
+        graph_wait_vsync();
 
-		dma_wait_fast();
-		dma_channel_send_chain(DMA_CHANNEL_GIF, current->data, q - current->data, 0, 0);
+        graph_set_framebuffer_filtered(framebuf[ctx].address, framebuf[ctx].width, framebuf[ctx].psm, 0, 0);
 
-		draw_wait_finish();
-		graph_wait_vsync();
+        ctx ^= 1;
 
-		graph_set_framebuffer_filtered(framebuf[ctx].address, framebuf[ctx].width, framebuf[ctx].psm, 0, 0);
+        flip_frame_buffer(flip, &framebuf[ctx]);
+    }
 
-		ctx ^= 1;
+    free(temp_verts);
+    free(screen_verts);
+    free(colors);
 
-		flip_frame_buffer(flip, &framebuf[ctx]);
-	}
+    packet_free(packets[0]);
+    packet_free(packets[1]);
 
-	free(temp_verts);
-	free(screen_verts);
-	free(colors);
-
-	packet_free(packets[0]);
-	packet_free(packets[1]);
-
-	return 0;
+    return 0;
 }
 
 int main(void) {

@@ -359,11 +359,22 @@ class PS2ModelGenerator:
         # PS2 doesn't need more than 4-6 decimal places
         precision = 6
         
+        # Convert triangles to strips
+        triangle_strips = PS2ModelGenerator.triangles_to_strips(data['indices'])
+        
+        # Calculate total index count for all strips
+        total_indices = sum(len(strip) for strip in triangle_strips)
+        
         with open(output_file, 'w') as f:
-            # Write indices
-            f.write(f"{len(data['indices']) * 3}\n")  # Total number of indices
-            for idx in data['indices']:
-                f.write(f"{idx[0]},{idx[1]},{idx[2]}\n")
+            # Write number of strips
+            f.write(f"{len(triangle_strips)}\n")
+            
+            # Write each strip
+            for strip in triangle_strips:
+                # Write strip length followed by indices
+                f.write(f"{len(strip)}\n")
+                for idx in strip:
+                    f.write(f"{idx}\n")
             
             # Write aligned vertices with limited precision
             f.write(f"{len(data['vertices'])}\n")  # Vertex count
@@ -417,7 +428,7 @@ class PS2ModelGenerator:
             width, height = img.size
             
             # Check if we're using a CLUT
-            if clut_file and os.path.exists(clut_file):
+            if (clut_file and os.path.exists(clut_file)):
                 # Load CLUT file
                 palette, psm = PS2ModelGenerator._load_clut_file(clut_file)
                 if palette is None:
@@ -671,6 +682,144 @@ class PS2ModelGenerator:
             traceback.print_exc()
             return None
 
+    @staticmethod
+    def triangles_to_strips(indices):
+        """
+        Convert triangle list to triangle strips.
+        
+        Args:
+            indices: List of triangle indices, each containing [v1, v2, v3]
+        
+        Returns:
+            List of triangle strips, each containing a list of vertex indices
+        """
+        # Edge map for finding adjacent triangles
+        edges = {}
+        triangles = set(range(len(indices)))
+        used_triangles = set()
+        
+        # Build edge connectivity map
+        for i, tri in enumerate(indices):
+            for j in range(3):
+                # Create directed edge (v1, v2)
+                v1 = tri[j]
+                v2 = tri[(j + 1) % 3]
+                edge = (v1, v2)
+                
+                if edge not in edges:
+                    edges[edge] = []
+                edges[edge].append(i)
+                
+                # Also add reversed edge for easier adjacency check
+                reversed_edge = (v2, v1)
+                if reversed_edge not in edges:
+                    edges[reversed_edge] = []
+                edges[reversed_edge].append(i)
+        
+        strips = []
+        
+        # While we have unused triangles
+        while triangles - used_triangles:
+            # Start a new strip
+            current_strip = []
+            
+            # Pick an unused triangle to start the strip
+            tri_idx = next(iter(triangles - used_triangles))
+            used_triangles.add(tri_idx)
+            
+            # Add the first triangle to the strip
+            first_tri = indices[tri_idx]
+            current_strip.extend([first_tri[0], first_tri[1], first_tri[2]])
+            
+            # Try to extend the strip
+            can_extend = True
+            while (can_extend):
+                can_extend = False
+                
+                # Get the last two vertices of the strip
+                v1, v2 = current_strip[-2], current_strip[-1]
+                
+                # Look for a triangle that shares the edge (v2, v1)
+                edge = (v2, v1)
+                if edge in edges:
+                    for adj_tri_idx in edges[edge]:
+                        if adj_tri_idx in triangles and adj_tri_idx not in used_triangles:
+                            # Found adjacent triangle, add its third vertex to the strip
+                            adj_tri = indices[adj_tri_idx]
+                            
+                            # Find the vertex that is not part of the edge
+                            for v in adj_tri:
+                                if v != v1 and v != v2:
+                                    current_strip.append(v)
+                                    used_triangles.add(adj_tri_idx)
+                                    can_extend = True
+                                    break
+                            break
+                
+                # If we couldn't extend one way, try the other direction
+                if not can_extend and len(current_strip) >= 3:
+                    v1, v2 = current_strip[1], current_strip[0]
+                    edge = (v1, v2)
+                    
+                    if edge in edges:
+                        for adj_tri_idx in edges[edge]:
+                            if adj_tri_idx in triangles and adj_tri_idx not in used_triangles:
+                                # Found adjacent triangle, prepend its third vertex to the strip
+                                adj_tri = indices[adj_tri_idx]
+                                
+                                # Find the vertex that is not part of the edge
+                                for v in adj_tri:
+                                    if v != v1 and v != v2:
+                                        current_strip.insert(0, v)
+                                        used_triangles.add(adj_tri_idx)
+                                        can_extend = True
+                                        break
+                                break
+            
+            # Add the strip if it's valid (at least 3 vertices)
+            if len(current_strip) >= 3:
+                strips.append(current_strip)
+        
+        return strips
+
+    @staticmethod
+    def calculate_strip_statistics(triangle_strips):
+        """Calculate statistics about the generated triangle strips."""
+        if not triangle_strips:
+            return {
+                'strip_count': 0,
+                'total_indices': 0,
+                'avg_strip_length': 0,
+                'min_strip_length': 0,
+                'max_strip_length': 0,
+                'compression_ratio': 0
+            }
+        
+        strip_lengths = [len(strip) for strip in triangle_strips]
+        total_indices = sum(strip_lengths)
+        min_length = min(strip_lengths)
+        max_length = max(strip_lengths)
+        avg_length = total_indices / len(triangle_strips)
+        
+        # Each triangle in a strip with n vertices has (n-2) triangles
+        strip_triangles = sum(max(0, len(strip) - 2) for strip in triangle_strips)
+        
+        # Compare to original triangle count (3 indices per triangle)
+        original_triangle_count = total_indices // 3
+        compression_ratio = 1.0
+        if original_triangle_count > 0:
+            compression_ratio = strip_triangles / original_triangle_count
+        
+        return {
+            'strip_count': len(triangle_strips),
+            'total_indices': total_indices,
+            'avg_strip_length': avg_length,
+            'min_strip_length': min_length,
+            'max_strip_length': max_length,
+            'triangles_in_strips': strip_triangles,
+            'compression_ratio': compression_ratio
+        }
+
 def main():
     parser = argparse.ArgumentParser(description='Convert OBJ files to PS2 custom format')
     parser.add_argument('input', help='Input OBJ file')
@@ -702,7 +851,23 @@ def main():
     print(f"Conversion complete! Created {args.output}")
     print(f"  Vertices: {len(model_data['vertices'])}")
     print(f"  Texture coordinates: {len(model_data['texcoords'])}")
-    print(f"  Triangles: {len(model_data['faces'])}")
+    
+    # Calculate triangle strip statistics
+    triangle_strips = PS2ModelGenerator.triangles_to_strips(
+        PS2ModelGenerator.align_vertex_data(
+            model_data['vertices'], 
+            model_data['texcoords'],
+            model_data['colors'], 
+            model_data['faces']
+        )['indices']
+    )
+    stats = PS2ModelGenerator.calculate_strip_statistics(triangle_strips)
+    
+    print(f"  Triangle strips: {stats['strip_count']}")
+    print(f"  Avg strip length: {stats['avg_strip_length']:.2f} vertices")
+    print(f"  Original triangles: {len(model_data['faces'])}")
+    print(f"  Triangles in strips: {stats['triangles_in_strips']}")
+    print(f"  Compression ratio: {stats['compression_ratio']:.2f}")
     
     # Report on materials and textures
     texture_file = PS2ModelGenerator.find_texture_file(
