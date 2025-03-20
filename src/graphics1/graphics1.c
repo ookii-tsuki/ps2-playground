@@ -23,14 +23,17 @@
 
 int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
 	
-	// define a 32-bit framebuffer
-	framebuf->width = SCREEN_WIDTH;
-	framebuf->height = SCREEN_HEIGHT;
-	framebuf->mask = 0;
-	framebuf->psm = GS_PSM_24;
-	framebuf->address = graph_vram_allocate(framebuf->width, framebuf->height, framebuf->psm, GRAPH_ALIGN_PAGE);
+	// allocate two framebuffers for double buffering
+	framebuf[0].width = framebuf[1].width = SCREEN_WIDTH;
+    framebuf[0].height = framebuf[1].height = SCREEN_HEIGHT;
+    framebuf[0].mask = framebuf[1].mask = 0;
+    framebuf[0].psm = framebuf[1].psm = GS_PSM_24;
 	
-	// define a 32-bit zbuffer
+    framebuf[0].address = graph_vram_allocate(framebuf[0].width, framebuf[0].height, framebuf[0].psm, GRAPH_ALIGN_PAGE);
+
+    framebuf[1].address = graph_vram_allocate(framebuf[1].width, framebuf[1].height, framebuf[1].psm, GRAPH_ALIGN_PAGE);
+	
+	// define and allocate zbuffer
 	zbuf->enable = DRAW_ENABLE;
 	zbuf->mask = 0;
 	zbuf->method = ZTEST_METHOD_GREATER_EQUAL;
@@ -159,6 +162,21 @@ void setup_texture(texbuffer_t *texbuf, clutbuffer_t *clutbuf) {
 	packet_free(packet);
 }
 
+void flip_frame_buffer(packet_t *flip,framebuffer_t *frame)
+{
+
+	qword_t *q = flip->data;
+
+	q = draw_framebuffer(q, 0, frame);
+	q = draw_finish(q);
+
+	dma_wait_fast();
+	dma_channel_send_normal_ucab(DMA_CHANNEL_GIF, flip->data, q - flip->data, 0);
+
+	draw_wait_finish();
+
+}
+
 VECTOR pos = {0.0f, 0.0f, 0.0f, 1.0f};
 VECTOR rot = {0.0f, 0.0f, 0.0f, 1.0f};
 VECTOR scale = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -206,6 +224,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 		.q = 1.0f
 	};
 
+	packet_t *flip = packet_init(3, PACKET_UCAB);
 
 	// set up matrices
 
@@ -240,7 +259,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 		q++; // skip the header
 
 		q = draw_disable_tests(q, 0, zbuf);
-		q = draw_clear(q, 0, 2048.0f - (SCREEN_WIDTH/2), 2048.0f - (SCREEN_HEIGHT/2), framebuf->width, framebuf->height, 20, 20, 20);
+		q = draw_clear(q, 0, 2048.0f - (SCREEN_WIDTH/2), 2048.0f - (SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 20, 20, 20);
 		q = draw_enable_tests(q, 0, zbuf);
 
 		u64 *dw = (u64*)draw_prim_start(q, 0, &prim, &color);
@@ -269,10 +288,14 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 		dma_wait_fast();
 		dma_channel_send_chain(DMA_CHANNEL_GIF, current->data, q - current->data, 0, 0);
 
-		ctx ^= 1;
-
 		draw_wait_finish();
 		graph_wait_vsync();
+
+		graph_set_framebuffer_filtered(framebuf[ctx].address, framebuf[ctx].width, framebuf[ctx].psm, 0, 0);
+
+		ctx ^= 1;
+
+		flip_frame_buffer(flip, &framebuf[ctx]);
 	}
 
 	free(temp_verts);
@@ -294,12 +317,12 @@ int main(void) {
 
 	printf("Initializing GS...\n");
 
-	framebuffer_t framebuf;
+	framebuffer_t framebuf[2];
 	zbuffer_t zbuf;
 	texbuffer_t texbuf;
 	clutbuffer_t clutbuf;
 
-	init_gs(&framebuf, &zbuf, &texbuf);
+	init_gs(framebuf, &zbuf, &texbuf);
 
 	printf("Loading model...\n");
 	mesh_t *mesh = load_model(MESH_FILE);
@@ -319,7 +342,7 @@ int main(void) {
 
 	printf("Drawing...\n");
 
-	draw(&framebuf, &zbuf, mesh);
+	draw(framebuf, &zbuf, mesh);
 
 	free_model(mesh);
 
