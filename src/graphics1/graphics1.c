@@ -27,15 +27,15 @@ int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
 	framebuf->width = SCREEN_WIDTH;
 	framebuf->height = SCREEN_HEIGHT;
 	framebuf->mask = 0;
-	framebuf->psm = GS_PSM_32;
+	framebuf->psm = GS_PSM_24;
 	framebuf->address = graph_vram_allocate(framebuf->width, framebuf->height, framebuf->psm, GRAPH_ALIGN_PAGE);
 	
 	// define a 32-bit zbuffer
 	zbuf->enable = DRAW_ENABLE;
 	zbuf->mask = 0;
-	zbuf->address = graph_vram_allocate(framebuf->width, framebuf->height, GS_PSM_32, GRAPH_ALIGN_PAGE);
 	zbuf->method = ZTEST_METHOD_GREATER_EQUAL;
-	zbuf->zsm = GS_ZBUF_32;
+	zbuf->zsm = GS_ZBUF_16;
+	zbuf->address = graph_vram_allocate(framebuf->width, framebuf->height, zbuf->zsm, GRAPH_ALIGN_PAGE);
 
 	// set GS mode
 	graph_set_mode(GRAPH_MODE_NONINTERLACED, GRAPH_MODE_VGA_1024_60, GRAPH_MODE_FRAME, GRAPH_DISABLE);
@@ -230,7 +230,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 
 		calculate_vertices((VECTOR*)temp_verts, mesh->vertex_count, (VECTOR*)mesh->vertices, local_screen);
 
-		draw_convert_xyz(screen_verts, 2048, 2048, 32, mesh->vertex_count, temp_verts);
+		draw_convert_xyz(screen_verts, 2048, 2048, 16, mesh->vertex_count, temp_verts);
 
 		draw_convert_rgbq(colors, mesh->vertex_count, temp_verts, mesh->colors, 255);
 
