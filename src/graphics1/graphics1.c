@@ -11,8 +11,11 @@
 #include <string.h>
 #include <malloc.h>
 #include <math3d.h>
+#include <math.h>
 #include <model.h>
 #include <clut.h>
+
+#define PI 3.1415926
 
 #define SCREEN_WIDTH 640
 #define SCREEN_HEIGHT 448
@@ -20,6 +23,7 @@
 #define DRAWBUF_SIZE 20000
 
 #define MESH_FILE "host:car.bin"
+#define CLUT_FILE "host:car.clt"
 
 int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
 	
@@ -177,16 +181,115 @@ void flip_frame_buffer(packet_t *flip,framebuffer_t *frame)
 
 }
 
-VECTOR pos = {0.0f, 0.0f, 0.0f, 1.0f};
-VECTOR rot = {0.0f, 0.0f, 0.0f, 1.0f};
-VECTOR scale = {1.0f, 1.0f, 1.0f, 1.0f};
 
-VECTOR cam_pos = {0.0f, 0.0f, 20.0f, 1.0f};
-VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
+typedef struct {
+	VECTOR position;
+	VECTOR rotation;
+	VECTOR scale;
+	prim_t prim;
+	color_t rgbaq;
+	vertex_f_t *vertices;
+	xyz_t *screen_verts;
+	color_t *colors;
+	texel_t *st;
+	mesh_t *mesh;
+} __attribute__((aligned(16))) render_object_t;
+
+
+typedef struct
+{
+	VECTOR position;
+	VECTOR rotation;
+	float fov;
+	float near;
+	float far;
+	float aspect;
+} camera_t;
+
+
+
+
+int allocate_render_object(render_object_t *obj, mesh_t *mesh) {
+	obj->vertices = memalign(128, sizeof(vertex_f_t) * mesh->vertex_count);
+	obj->screen_verts = memalign(128, sizeof(xyz_t) * mesh->vertex_count);
+	obj->colors = memalign(128, sizeof(color_t) * mesh->vertex_count);
+	obj->st = memalign(128, sizeof(texel_t) * mesh->vertex_count);
+
+	if (!obj->vertices || !obj->screen_verts || !obj->colors || !obj->st) {
+		return -1;
+	}
+
+	obj->mesh = mesh;
+
+	return 0;
+}
+
+qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, camera_t *cam) {
+
+	MATRIX local_world, world_view, local_screen;
+
+	qword_t *dmatag = q;
+	q++;
+
+
+	create_local_world(local_world, obj->position, obj->rotation);
+	matrix_scale(local_world, local_world, obj->scale);
+
+	create_world_view(world_view, cam->position, cam->rotation);
+
+	create_local_screen(local_screen, local_world, world_view, view_screen);
+
+	calculate_vertices((VECTOR*)obj->vertices, obj->mesh->vertex_count, (VECTOR*)obj->mesh->vertices, local_screen);
+
+	draw_convert_xyz(obj->screen_verts, 2048, 2048, 16, obj->mesh->vertex_count, obj->vertices);
+
+	draw_convert_rgbq(obj->colors, obj->mesh->vertex_count, obj->vertices, obj->mesh->colors, 255);
+
+	draw_convert_st(obj->st, obj->mesh->vertex_count, obj->vertices, obj->mesh->texcoords);
+
+
+	// Process each triangle strip separately
+	int strip_idx;
+	int vertex_idx;
+	for (strip_idx = 0; strip_idx < obj->mesh->strip_count; strip_idx++) {
+		triangle_strip_t* strip = &obj->mesh->strips[strip_idx];
+		
+		// Start a new primitive for each strip
+		u64 *dw = (u64*)draw_prim_start(q, 0, &obj->prim, &obj->rgbaq);
+		
+		// Add all vertices in this strip
+		for (int i = 0; i < strip->length; i++) {
+			vertex_idx = strip->indices[i];
+			*dw++ = obj->st[vertex_idx].uv;
+			*dw++ = obj->colors[vertex_idx].rgbaq;
+			*dw++ = obj->screen_verts[vertex_idx].xyz;
+		}
+
+		// Pad to qword alignment if necessary
+		if ((3 * strip->length) & 1) {
+			*dw++ = 0;
+		}
+
+		// End this strip
+		q = draw_prim_end((qword_t*)dw, 3, DRAW_STQ2_REGLIST);
+	}
+
+	DMATAG_CNT(dmatag,q-dmatag-1,0,0,0);
+
+	return q;
+}
+
 
 
 int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
     
+	VECTOR pos = {0.0f, 0.0f, 0.0f, 1.0f};
+	VECTOR rot = {0.0f, 0.0f, 0.0f, 1.0f};
+	VECTOR scale = {1.0f, 1.0f, 1.0f, 1.0f};
+
+	VECTOR cam_pos = {0.0f, 0.0f, 80.0f, 1.0f};
+	VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
+
     int ctx = 0;
 
     packet_t *packets[2];
@@ -196,14 +299,10 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
     packets[0] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
     packets[1] = packet_init(DRAWBUF_SIZE, PACKET_NORMAL);
 
-    MATRIX local_world, view_screen, world_view, local_screen;
+    MATRIX view_screen;
 
-    // calculation space
-    vertex_f_t *temp_verts = memalign(128, sizeof(vertex_f_t) * mesh->vertex_count);
-
-    xyz_t *screen_verts = memalign(128, sizeof(xyz_t) * mesh->vertex_count);
-    color_t *colors = memalign(128, sizeof(color_t) * mesh->vertex_count);
-    texel_t *st = memalign(128, sizeof(texel_t) * mesh->vertex_count);
+	render_object_t obj;
+	camera_t cam;
 
     prim_t prim;
 
@@ -226,71 +325,60 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 
     packet_t *flip = packet_init(3, PACKET_UCAB);
 
-    // set up matrices
+	allocate_render_object(&obj, mesh);
 
-    create_view_screen(view_screen, graph_aspect_ratio(), -3.00f, 3.00f, -3.00f, 3.00f, 1.00f, 2000.00f);
+	vector_copy(obj.position, pos);
+	vector_copy(obj.rotation, rot);
+	vector_copy(obj.scale, scale);
+	obj.prim = prim;
+	obj.rgbaq = color;
+
+	cam.aspect = graph_aspect_ratio();
+	cam.fov = 60.0f;
+	cam.near = 1.0f;
+	cam.far = 2000.0f;
+	vector_copy(cam.position, cam_pos);
+	vector_copy(cam.rotation, cam_rot);
+
+	float tanHalfFovY = tanf(cam.fov * (PI / 180.0f) / 2.0f);
+	float top = cam.near * tanHalfFovY;
+	float bottom = -top;
+	float right = top * cam.aspect;
+	float left = -right;
+
+    create_view_screen(view_screen, graph_aspect_ratio(), left, right, bottom, top, cam.near, cam.far);
+
 
     dma_wait_fast();
 
-    int i;
-	int strip_idx;
-	int vertex_idx;
+	qword_t *q;
     while (1)
     {
         current = packets[ctx];
         dmatag = current->data;
 
-        rot[1] += 0.01f;
+		q = current->data;
 
-        create_local_world(local_world, pos, rot);
-        matrix_scale(local_world, local_world, scale);
+		dmatag = q;
+		q++;
 
-        create_world_view(world_view, cam_pos, cam_rot);
+		// Clear framebuffer without any pixel testing.
+		q = draw_disable_tests(q, 0, zbuf);
+		q = draw_clear(q, 0, 2048.0f-(SCREEN_WIDTH/2), 2048.0f-(SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 0x00,0x00,0x00);
+		q = draw_enable_tests(q,0,zbuf);
 
-        create_local_screen(local_screen, local_world, world_view, view_screen);
+		DMATAG_CNT(dmatag, q-dmatag - 1, 0, 0, 0);
 
-        calculate_vertices((VECTOR*)temp_verts, mesh->vertex_count, (VECTOR*)mesh->vertices, local_screen);
+		obj.rotation[1] += 0.01f;
 
-        draw_convert_xyz(screen_verts, 2048, 2048, 16, mesh->vertex_count, temp_verts);
+		q = render_object(q, view_screen, &obj, &cam);
 
-        draw_convert_rgbq(colors, mesh->vertex_count, temp_verts, mesh->colors, 255);
-
-        draw_convert_st(st, mesh->vertex_count, temp_verts, mesh->texcoords);
-
-        qword_t *q = dmatag;
-        q++; // skip the header
-
-        q = draw_disable_tests(q, 0, zbuf);
-        q = draw_clear(q, 0, 2048.0f - (SCREEN_WIDTH/2), 2048.0f - (SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 20, 20, 20);
-        q = draw_enable_tests(q, 0, zbuf);
-
-        // Process each triangle strip separately
-        for (strip_idx = 0; strip_idx < mesh->strip_count; strip_idx++) {
-            triangle_strip_t* strip = &mesh->strips[strip_idx];
-            
-            // Start a new primitive for each strip
-            u64 *dw = (u64*)draw_prim_start(q, 0, &prim, &color);
-            
-            // Add all vertices in this strip
-            for (i = 0; i < strip->length; i++) {
-                vertex_idx = strip->indices[i];
-                *dw++ = st[vertex_idx].uv;
-                *dw++ = colors[vertex_idx].rgbaq;
-                *dw++ = screen_verts[vertex_idx].xyz;
-            }
-
-            // Pad to qword alignment if necessary
-            if ((3 * strip->length) & 1) {
-				*dw++ = 0;
-			}
-
-            // End this strip
-            q = draw_prim_end((qword_t*)dw, 3, DRAW_STQ2_REGLIST);
-        }
+		dmatag = q;
+		q++;
 
         q = draw_finish(q);
 
-        DMATAG_END(dmatag,(q-current->data)-1,0,0,0);
+        DMATAG_END(dmatag,q-dmatag-1,0,0,0);
 
         dma_wait_fast();
         dma_channel_send_chain(DMA_CHANNEL_GIF, current->data, q - current->data, 0, 0);
@@ -304,10 +392,6 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 
         flip_frame_buffer(flip, &framebuf[ctx]);
     }
-
-    free(temp_verts);
-    free(screen_verts);
-    free(colors);
 
     packet_free(packets[0]);
     packet_free(packets[1]);
@@ -342,7 +426,7 @@ int main(void) {
 
 	printf("Loading texture...\n");
 
-	clut_t *clut = load_clut("host:car.clt");
+	clut_t *clut = load_clut(CLUT_FILE);
 
 	load_texture(&texbuf, &clutbuf, mesh->texture, clut);
 	setup_texture(&texbuf, &clutbuf);
