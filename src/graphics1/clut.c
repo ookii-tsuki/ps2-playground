@@ -36,6 +36,14 @@ clut_t* load_clut(const char* filename) {
         return NULL;
     }
     
+    // Read unique CLUT identifier
+    u32 clut_id;
+    if (fread(&clut_id, 4, 1, file) != 1) {
+        printf("Error: Failed to read CLUT identifier\n");
+        fclose(file);
+        return NULL;
+    }
+    
     // Validate color count based on PSM
     u16 max_colors = (psm == GS_PSM_4) ? 16 : 256;
     if (color_count > max_colors) {
@@ -54,6 +62,7 @@ clut_t* load_clut(const char* filename) {
     // Initialize the CLUT
     clut->psm = psm;
     clut->color_count = color_count;
+    clut->id = clut_id;  // Store the unique identifier
     
     // Calculate size and allocate palette data with 16-byte alignment
     unsigned int palette_size = color_count * sizeof(u32);
@@ -105,6 +114,7 @@ void print_clut_info(const clut_t* clut) {
     
     printf("CLUT Information:\n");
     printf("================\n");
+    printf("ID: 0x%08X\n", clut->id);  // Display the CLUT ID
     printf("PSM: 0x%02X (%s)\n", clut->psm, 
            clut->psm == GS_PSM_4 ? "4-bit indexed" : 
            clut->psm == GS_PSM_8 ? "8-bit indexed" : "Unknown");

@@ -125,23 +125,39 @@ class PaletteGenerator:
             
         return palette_img
     
-    def save_ps2_clut(self, palette: List[Tuple[int, int, int, int]], output_path: str) -> None:
-        """Save the palette in PS2 CLUT format."""
-        # Write header
+    def save_ps2_clut(self, palette: List[Tuple[int, int, int, int]], output_path: str, clut_id: int = None) -> None:
+        """
+        Save the palette in PS2 CLUT format with a unique identifier.
+        
+        Args:
+            palette: List of RGBA color tuples
+            output_path: Path to save the CLUT file
+            clut_id: Optional unique identifier (32-bit). If None, a random ID is generated.
+        """
+        # Generate random ID if not provided
+        if clut_id is None:
+            import random
+            clut_id = random.randint(1, 0xFFFFFFFF)
+        
+        # Write header and data
         with open(output_path, 'wb') as f:
             # Write header
             f.write(b'CLT\0')  # Magic identifier
             f.write(self.psm.to_bytes(1, byteorder='little'))  # PSM value
             f.write(len(palette).to_bytes(2, byteorder='little'))  # Color count
+            f.write(clut_id.to_bytes(4, byteorder='little'))  # Unique CLUT identifier
             
-            # Write color data in PS2 CLUT format (ABGR8888)
+            # Write color data in PS2 CLUT format
             for color in palette:
                 r, g, b, a = color
                 # Convert to PS2 32-bit RGBA format
                 f.write(bytes([r, g, b, a]))
         
         psm_name = "4-bit" if self.psm == GS_PSM_4 else "8-bit" if self.psm == GS_PSM_8 else f"0x{self.psm:02X}"
-        print(f"Saved PS2 CLUT with {len(palette)} colors ({psm_name}) to {output_path}")
+        print(f"Saved PS2 CLUT with ID 0x{clut_id:08X}, {len(palette)} colors ({psm_name}) to {output_path}")
+        
+        # Return the CLUT ID for potential use by the caller
+        return clut_id
     
     def save_preview_image(self, palette: List[Tuple[int, int, int, int]], output_path: str) -> None:
         """Save a preview image of the palette."""
@@ -169,6 +185,8 @@ def main():
     parser.add_argument('--colors', '-c', type=int, help='Override the number of colors')
     parser.add_argument('--preview', '-v', action='store_true', 
                         help='Generate a preview image of the palette')
+    parser.add_argument('--clut-id', type=lambda x: int(x, 0), 
+                        help='Specify a custom CLUT ID (defaults to random)')
     args = parser.parse_args()
     
     try:
@@ -191,14 +209,14 @@ def main():
         else:
             output_file = args.output_file
             
-        # Save PS2 CLUT format
-        generator.save_ps2_clut(palette, output_file)
+        # Save PS2 CLUT format with ID
+        clut_id = generator.save_ps2_clut(palette, output_file, args.clut_id)
         
         # Generate preview if requested
         if args.preview:
             generator.save_preview_image(palette, output_file)
         
-        print("PS2 CLUT generation complete!")
+        print(f"PS2 CLUT generation complete! CLUT ID: 0x{clut_id:08X}")
         return 0
     
     except Exception as e:

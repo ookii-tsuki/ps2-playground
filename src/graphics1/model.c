@@ -180,8 +180,9 @@ mesh_t* load_model(const char* filename) {
     // Read texture data if present
     // Try to read texture dimensions and format
     int width, height, psm, texture_size;
-    if (fscanf(file, "%d,%d,%d,%d", &width, &height, &psm, &texture_size) == 4) {
-        // Texture data is present
+    u32 clut_id = 0;
+    if (fscanf(file, "%d,%d,%d,%d,%u", &width, &height, &psm, &texture_size, &clut_id) == 5) {
+        // Texture data is present with CLUT ID
         model->texture = (texture_t*)memalign(16, sizeof(texture_t));
         if (!model->texture) {
             perror("Failed to allocate memory for texture structure");
@@ -194,6 +195,10 @@ mesh_t* load_model(const char* filename) {
         model->texture->height = height;
         model->texture->psm = psm;
         model->texture->texture_size = texture_size;
+        model->texture->clut_id = clut_id; // Store the CLUT ID
+        
+        printf("Loading texture with dimensions %dx%d, PSM=0x%02X, CLUT ID=0x%08X\n", 
+               width, height, psm, clut_id);
         
         // Allocate memory for texture data
         model->texture->texture_data = memalign(128, texture_size);
@@ -450,8 +455,14 @@ void print_mesh_data(const mesh_t* model) {
     if (model->texture) {
         printf("\nTexture Information:\n");
         printf("  Dimensions: %d x %d\n", model->texture->width, model->texture->height);
-        printf("  Format (PSM): %d\n", model->texture->psm);
+        printf("  Format (PSM): 0x%02X\n", model->texture->psm);
         printf("  Data Size: %d bytes\n", model->texture->texture_size);
+        
+        if (model->texture->clut_id != 0) {
+            printf("  CLUT ID: 0x%08X\n", model->texture->clut_id);
+        } else {
+            printf("  No CLUT associated\n");
+        }
         
         // Optional: Print a few bytes of texture data as hex
         if (model->texture->texture_data) {

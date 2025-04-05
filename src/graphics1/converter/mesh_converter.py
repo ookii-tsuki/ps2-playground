@@ -427,19 +427,24 @@ class PS2ModelGenerator:
             img = Image.open(texture_file)
             width, height = img.size
             
+            # Initialize CLUT ID as 0 (no CLUT)
+            clut_id = 0
+            
             # Check if we're using a CLUT
             if (clut_file and os.path.exists(clut_file)):
                 # Load CLUT file
-                palette, psm = PS2ModelGenerator._load_clut_file(clut_file)
+                palette, psm, loaded_clut_id = PS2ModelGenerator._load_clut_file(clut_file)
                 if palette is None:
                     # Fall back to non-indexed if CLUT loading fails
                     print(f"Warning: Failed to load CLUT, falling back to direct color")
                     clut_file = None
                     psm, bytes_per_pixel = PS2ModelGenerator.determine_texture_format(img)
                 else:
+                    # Save the CLUT ID
+                    clut_id = loaded_clut_id
                     # Calculate bytes per pixel based on PSM
                     bytes_per_pixel = 1 if psm == 0x13 else 0.5  # 8-bit (1 byte) or 4-bit (0.5 byte)
-                    print(f"Using CLUT with PSM=0x{psm:02X}, {len(palette)} colors")
+                    print(f"Using CLUT with PSM=0x{psm:02X}, ID=0x{clut_id:08X}, {len(palette)} colors")
             else:
                 # No CLUT, use direct color format
                 psm, bytes_per_pixel = PS2ModelGenerator.determine_texture_format(img)
@@ -457,8 +462,8 @@ class PS2ModelGenerator:
             # Calculate texture size in bytes
             texture_size = int(width * height * bytes_per_pixel)
             
-            # Write texture header (width, height, format, size)
-            f.write(f"{width},{height},{psm},{texture_size}\n")
+            # Write texture header (width, height, format, size, CLUT ID)
+            f.write(f"{width},{height},{psm},{texture_size},{clut_id}\n")
             
             # Write pixel data based on format
             pixels = img.load()
@@ -485,6 +490,7 @@ class PS2ModelGenerator:
         import numpy as np
         palette_array = np.array(palette)
 
+        # Debug logging for certain colors if needed
         for i, color in enumerate(palette):
             if color[0] == 90 and color[1] == 45 and color[2] == 34:
                 print(f"Palette color {i}: {color}")
@@ -525,11 +531,7 @@ class PS2ModelGenerator:
                     color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
                     # Get index of closest color
                     closest_idx = np.argmin(color_distances)
-
-                    if x == 42 and y == 0:
-                        print(f"Pixel color: {r}, {g}, {b}, {a}")
-                        print(f"Closest color: {closest_idx}")
-                
+            
                     # Write one index value per line (8-bit value)
                     f.write(f"{closest_idx:02x}\n")
 
@@ -560,23 +562,27 @@ class PS2ModelGenerator:
 
     @staticmethod
     def _load_clut_file(clut_file):
-        """Load a CLUT file and extract the palette."""
+        """Load a CLUT file and extract the palette and ID."""
         try:
             with open(clut_file, 'rb') as f:
                 # Read and verify magic identifier
                 magic = f.read(4)
                 if magic != b'CLT\0':
                     print(f"Error: Invalid CLUT file format (bad magic number)")
-                    return None, None
+                    return None, None, None
                 
                 # Read PSM
                 psm = int.from_bytes(f.read(1), byteorder='little')
                 if psm != 0x14 and psm != 0x13:
                     print(f"Error: Invalid CLUT PSM (must be 0x14 or 0x13, got 0x{psm:02X})")
-                    return None, None
+                    return None, None, None
                 
                 # Read color count
                 color_count = int.from_bytes(f.read(2), byteorder='little')
+                
+                # Read CLUT ID
+                clut_id = int.from_bytes(f.read(4), byteorder='little')
+                print(f"Found CLUT ID: 0x{clut_id:08X}")
                 
                 # Validate color count
                 max_colors = 16 if psm == 0x14 else 256
@@ -590,17 +596,17 @@ class PS2ModelGenerator:
                     color_bytes = f.read(4)
                     if len(color_bytes) != 4:
                         print(f"Error: Failed to read CLUT color data at index {i}")
-                        return None, None
+                        return None, None, None
                     
                     r, g, b, a = color_bytes
                     palette.append((r, g, b, a))
                 
-                return palette, psm
+                return palette, psm, clut_id
         except Exception as e:
             print(f"Error loading CLUT file: {e}")
             import traceback
             traceback.print_exc()
-            return None, None
+            return None, None, None
 
     @staticmethod
     def save_reconstructed_texture(texture_file, clut_file, output_path=None):
@@ -632,10 +638,12 @@ class PS2ModelGenerator:
             original_pixels = original_img.load()
             
             # Load CLUT file
-            palette, psm = PS2ModelGenerator._load_clut_file(clut_file)
+            palette, psm, clut_id = PS2ModelGenerator._load_clut_file(clut_file)
             if palette is None:
                 print(f"Error: Failed to load CLUT for reconstruction")
                 return None
+            
+            print(f"Reconstructing texture using CLUT ID: 0x{clut_id:08X}")
             
             # Create a new image for the reconstruction
             reconstructed_img = Image.new('RGBA', (width, height))
