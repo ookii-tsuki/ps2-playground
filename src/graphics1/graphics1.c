@@ -209,9 +209,14 @@ int load_cluts(const char **filenames, int count) {
 
 		clutbuffer_t *clutbuf = load_clut_in_vram(clut);
 
+
 		for (int j = 0; j < num_objects; j++)
 		{
-			if (objects[j]->mesh->texture->clut_id == clut->id)
+			// compiler is doing weird shit here that makes comparison not work. volatile fixes it.
+			volatile u32 obj_clut_id = objects[j]->mesh->texture->clut_id;
+			volatile u32 clut_id = clut->id;
+
+			if (obj_clut_id == clut_id)
 			{
 				objects[j]->clutbuf = clutbuf;
 			}
@@ -236,6 +241,7 @@ void set_current_object(int i) {
 	current_object->texbuf = texbuf;
 
 	clutbuffer_t *clutbuf = current_object->mesh->texture->clut_id > 0 ? current_object->clutbuf : &no_clut;
+
 	setup_texture(current_object->texbuf, clutbuf);
 }
 
@@ -407,7 +413,9 @@ int main(void) {
 		"host:/oiia.bin"
 	};
 
-	int l = load_models(model_filenames, 3);
+	num_objects = sizeof(model_filenames) / sizeof(model_filenames[0]);
+	
+	int l = load_models(model_filenames, num_objects);
 	
 	if (l < 0) {
 		printf("FATAL: Failed to load models\n");
@@ -430,7 +438,7 @@ int main(void) {
 
 	printf("Drawing...\n");
 
-	set_current_object(0);
+	set_current_object(2);
 
 	draw(framebuf, &zbuf);
 
