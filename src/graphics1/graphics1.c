@@ -72,11 +72,11 @@ int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	zbuf->enable = DRAW_ENABLE;
 	zbuf->mask = 0;
 	zbuf->method = ZTEST_METHOD_GREATER_EQUAL;
-	zbuf->zsm = GS_ZBUF_16;
+	zbuf->zsm = GS_ZBUF_24;
 	zbuf->address = graph_vram_allocate(framebuf->width, framebuf->height, zbuf->zsm, GRAPH_ALIGN_PAGE);
 
 	// set GS mode
-	graph_set_mode(GRAPH_MODE_NONINTERLACED, GRAPH_MODE_VGA_1024_60, GRAPH_MODE_FRAME, GRAPH_DISABLE);
+	graph_set_mode(GRAPH_MODE_INTERLACED, GRAPH_MODE_NTSC, GRAPH_MODE_FIELD, GRAPH_DISABLE);
 	graph_set_screen(0, 0, framebuf->width, framebuf->height);
 	graph_set_bgcolor(0, 0, 0);
 	graph_set_framebuffer_filtered(framebuf->address, framebuf->width, framebuf->psm, 0, 0);
@@ -262,7 +262,7 @@ qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, cam
 
 	calculate_vertices((VECTOR*)obj->vertices, obj->mesh->vertex_count, (VECTOR*)obj->mesh->vertices, local_screen);
 
-	draw_convert_xyz(obj->screen_verts, 2048, 2048, 16, obj->mesh->vertex_count, obj->vertices);
+	draw_convert_xyz(obj->screen_verts, 2048, 2048, 24, obj->mesh->vertex_count, obj->vertices);
 
 	draw_convert_rgbq(obj->colors, obj->mesh->vertex_count, obj->vertices, obj->mesh->colors, 255);
 
@@ -304,7 +304,7 @@ qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, cam
 
 int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
-	VECTOR cam_pos = {0.0f, 0.0f, 30.0f, 1.0f};
+	VECTOR cam_pos = {0.0f, 0.0f, 70.0f, 1.0f};
 	VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
 
     int ctx = 0;
@@ -360,7 +360,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
 		DMATAG_CNT(dmatag, q-dmatag - 1, 0, 0, 0);
 
-		current_object->rotation[1] += 0.07f;
+		current_object->rotation[1] += 0.01f;
 		current_object->position[1] = sin(current_object->rotation[1] * 2.0f) * 0.1f;
 
 		q = render_object(q, view_screen, current_object, &cam);
@@ -438,7 +438,7 @@ int main(void) {
 
 	printf("Drawing...\n");
 
-	set_current_object(2);
+	set_current_object(1);
 
 	draw(framebuf, &zbuf);
 
