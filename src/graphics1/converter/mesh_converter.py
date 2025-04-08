@@ -4,12 +4,13 @@ import sys
 import os
 import argparse
 from typing import List, Tuple, Dict, Optional
+import struct
 
 class Material:
     """Class representing a material with properties."""
     def __init__(self, name: str):
         self.name = name
-        self.diffuse_color = [1.0, 1,0, 1.0, 1.0]  # Default color (RGBA)
+        self.diffuse_color = [1.0, 1.0, 1.0, 1.0]  # Default color (RGBA)
         self.texture_map = None  # Path to texture file
 
     def set_diffuse_color(self, r: float, g: float, b: float, a: float = 1.0):
@@ -354,74 +355,68 @@ class PS2ModelGenerator:
     
     @staticmethod
     def _write_model_file(output_file, data, texture_file, clut_file=None):
-        """Write the model data to a file with limited float precision."""
-        # Define precision for floating point values
-        # PS2 doesn't need more than 4-6 decimal places
-        precision = 6
-        
+        """Write the model data to a binary file format."""
         # Convert triangles to strips
         triangle_strips = PS2ModelGenerator.triangles_to_strips(data['indices'])
         
-        # Calculate total index count for all strips
-        total_indices = sum(len(strip) for strip in triangle_strips)
-        
-        with open(output_file, 'w') as f:
-            # Write number of strips
-            f.write(f"{len(triangle_strips)}\n")
+        with open(output_file, 'wb') as f:
+            # Write number of strips (4-byte unsigned int)
+            f.write(len(triangle_strips).to_bytes(4, byteorder='little'))
             
             # Write each strip
             for strip in triangle_strips:
-                # Write strip length followed by indices
-                f.write(f"{len(strip)}\n")
+                # Write strip length (4-byte unsigned int)
+                f.write(len(strip).to_bytes(4, byteorder='little'))
+                # Write indices (4-byte unsigned ints)
                 for idx in strip:
-                    f.write(f"{idx}\n")
+                    f.write(idx.to_bytes(4, byteorder='little'))
             
-            # Write aligned vertices with limited precision
-            f.write(f"{len(data['vertices'])}\n")  # Vertex count
+            # Write aligned vertices
+            f.write(len(data['vertices']).to_bytes(4, byteorder='little'))  # Vertex count
             for vertex in data['vertices']:
-                # Format with limited precision
-                vx = round(vertex[0], precision)
-                vy = round(vertex[1], precision)
-                vz = round(vertex[2], precision)
-                vw = round(vertex[3], precision)
-                f.write(f"{vx},{vy},{vz},{vw}\n")
+                # Write 4 floating-point values (x,y,z,w)
+                for value in vertex:
+                    f.write(struct.pack('<f', float(value)))
             
-            # Write aligned colors with limited precision
-            f.write(f"{len(data['colors'])}\n")  # Color count
+            # Write aligned colors
+            f.write(len(data['colors']).to_bytes(4, byteorder='little'))  # Color count
             for color in data['colors']:
-                # Format with limited precision
-                r = round(color[0], precision)
-                g = round(color[1], precision)
-                b = round(color[2], precision)
-                a = round(color[3], precision)
-                f.write(f"{r},{g},{b},{a}\n")
+                # Write 4 floating-point values (r,g,b,a)
+                for value in color:
+                    f.write(struct.pack('<f', float(value)))
+                    print(f"Val: {value}")
+                print(f"Color: {color}")
             
-            # Write aligned texture coordinates with limited precision
-            f.write(f"{len(data['texcoords'])}\n")  # Texcoord count
+            # Write aligned texture coordinates
+            f.write(len(data['texcoords']).to_bytes(4, byteorder='little'))  # Texcoord count
             for texcoord in data['texcoords']:
                 # Ensure coordinates are in 0-1 range
                 s = max(0.0, min(1.0, texcoord[0]))
                 t = max(0.0, min(1.0, texcoord[1]))
-                # Round to limited precision
-                s = round(s, precision)
-                t = round(t, precision)
-                # Flip Y coordinate
-                t_flipped = round(1.0 - t, precision)
-                # Write to file with zeros for R and Q
-                f.write(f"{s},{t_flipped},0.0,0.0\n")
+                # Flip Y coordinate for PS2
+                t_flipped = 1.0 - t
+                # Write as 4 floating point values (s,t,0,0)
+                f.write(struct.pack('<f', s))
+                f.write(struct.pack('<f', t_flipped))
+                f.write(struct.pack('<f', 0.0))
+                f.write(struct.pack('<f', 0.0))
             
             # Write texture data if available
-            PS2ModelGenerator._write_texture_data(f, texture_file, clut_file)
-    
+            PS2ModelGenerator._write_texture_data_binary(f, texture_file, clut_file)
+
     @staticmethod
-    def _write_texture_data(f, texture_file, clut_file=None):
-        """Write texture data to the model file."""
+    def _write_texture_data_binary(f, texture_file, clut_file=None):
+        """Write texture data to the model file in binary format."""
         if not texture_file or not os.path.exists(texture_file):
+            # No texture - write 0 for width and height to indicate no texture
+            f.write((0).to_bytes(4, byteorder='little'))  # Width = 0
+            f.write((0).to_bytes(4, byteorder='little'))  # Height = 0
             return
             
         try:
             import PIL.Image as Image
             import numpy as np
+            import struct
             
             # Load the texture image
             img = Image.open(texture_file)
@@ -462,59 +457,74 @@ class PS2ModelGenerator:
             # Calculate texture size in bytes
             texture_size = int(width * height * bytes_per_pixel)
             
-            # Write texture header (width, height, format, size, CLUT ID)
-            f.write(f"{width},{height},{psm},{texture_size},{clut_id}\n")
+            # Write texture header
+            f.write(width.to_bytes(4, byteorder='little'))          # Width (uint32)
+            f.write(height.to_bytes(4, byteorder='little'))         # Height (uint32)
+            f.write(psm.to_bytes(4, byteorder='little'))            # PSM format (uint32)
+            f.write(texture_size.to_bytes(4, byteorder='little'))   # Texture size (uint32)
+            f.write(clut_id.to_bytes(4, byteorder='little'))        # CLUT ID (uint32)
             
             # Write pixel data based on format
             pixels = img.load()
             
             if clut_file and palette is not None:
-                # Write indexed texture with CLUT in memory but don't include path
-                PS2ModelGenerator._write_pixels_indexed(f, pixels, width, height, palette, psm)
+                # Write indexed texture with CLUT in memory
+                PS2ModelGenerator._write_pixels_indexed_binary(f, pixels, width, height, palette, psm)
             else:
                 # Standard direct color texture
-                PS2ModelGenerator._write_pixels(f, pixels, width, height, psm)
+                PS2ModelGenerator._write_pixels_binary(f, pixels, width, height, psm)
                 
         except ImportError:
             print("Warning: PIL/Pillow library not found, skipping texture export")
             print("Install with: pip install pillow")
+            # Write zeros to indicate no texture
+            f.write((0).to_bytes(4, byteorder='little'))  # Width = 0
+            f.write((0).to_bytes(4, byteorder='little'))  # Height = 0
         except Exception as e:
             print(f"Error processing texture: {e}")
             import traceback
             traceback.print_exc()
+            # Write zeros to indicate no texture
+            f.write((0).to_bytes(4, byteorder='little'))  # Width = 0
+            f.write((0).to_bytes(4, byteorder='little'))  # Height = 0
 
     @staticmethod
-    def _write_pixels_indexed(f, pixels, width, height, palette, psm):
-        """Write indexed pixel data for CLUT textures."""
+    def _write_pixels_indexed_binary(f, pixels, width, height, palette, psm):
+        """Write indexed pixel data for CLUT textures in binary format."""
         # Convert palette to numpy array for faster color matching
         import numpy as np
         palette_array = np.array(palette)
-
-        # Debug logging for certain colors if needed
-        for i, color in enumerate(palette):
-            if color[0] == 90 and color[1] == 45 and color[2] == 34:
-                print(f"Palette color {i}: {color}")
-
+        
         if psm == 0x14:  # GS_PSM_4 (4-bit indexed, 16 colors)
+            # Process pairs of pixels to create bytes (4-bits per pixel)
             for y in range(height):
-                for x in range(width):
-                    # Get pixel color
-                    if len(pixels[x, y]) == 4:
-                        r, g, b, a = pixels[x, y]
-                    else:
-                        r, g, b = pixels[x, y]
-                        a = 255
+                for x in range(0, width, 2):
+                    # Process two pixels at a time to create one byte
+                    indices = []
                     
-                    # Find closest color in palette
-                    pixel_color = np.array([r, g, b, a])
-                    # Calculate Euclidean distance to all palette colors
-                    color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
-                    # Get index of closest color
-                    closest_idx = np.argmin(color_distances)
+                    for dx in range(2):
+                        if x + dx < width:
+                            # Get pixel color
+                            pixel_x = x + dx
+                            if len(pixels[pixel_x, y]) == 4:
+                                r, g, b, a = pixels[pixel_x, y]
+                            else:
+                                r, g, b = pixels[pixel_x, y]
+                                a = 255
+                            
+                            # Find closest color in palette
+                            pixel_color = np.array([r, g, b, a])
+                            color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
+                            closest_idx = np.argmin(color_distances)
+                            indices.append(closest_idx)
+                        else:
+                            # Padding for odd width
+                            indices.append(0)
                     
-                    # Write one index value per line (4-bit value)
-                    f.write(f"{closest_idx:x}\n")
-                    
+                    # Pack two 4-bit indices into one byte
+                    byte_value = (indices[0] << 4) | (indices[1] & 0x0F)
+                    f.write(bytes([byte_value]))
+        
         elif psm == 0x13:  # GS_PSM_8 (8-bit indexed, 256 colors)
             for y in range(height):
                 for x in range(width):
@@ -527,38 +537,35 @@ class PS2ModelGenerator:
                     
                     # Find closest color in palette
                     pixel_color = np.array([r, g, b, a])
-                    # Calculate Euclidean distance to all palette colors
                     color_distances = np.sqrt(np.sum((palette_array - pixel_color) ** 2, axis=1))
-                    # Get index of closest color
                     closest_idx = np.argmin(color_distances)
-            
-                    # Write one index value per line (8-bit value)
-                    f.write(f"{closest_idx:02x}\n")
+                    
+                    # Write one byte per pixel (8-bit index)
+                    f.write(bytes([closest_idx]))
 
     @staticmethod
-    def _write_pixels(f, pixels, width, height, psm):
-        """Write pixel data based on texture format."""
+    def _write_pixels_binary(f, pixels, width, height, psm):
+        """Write pixel data based on texture format in binary."""
         if psm == 0x00:  # GS_PSM_32 (32-bit RGBA)
             for y in range(height):
                 for x in range(width):
                     r, g, b, a = pixels[x, y]
-                    # RGBA packed as a hex value AARRGGBB
-                    hex_value = (a << 24) | (r << 16) | (g << 8) | b
-                    f.write(f"{hex_value:08x}\n")
+                    # Write RGBA bytes in little-endian order (ABGR)
+                    f.write(bytes([r, g, b, a]))
                     
         elif psm == 0x01:  # GS_PSM_24 (24-bit RGB)
             for y in range(height):
                 for x in range(width):
                     r, g, b = pixels[x, y]
-                    # RGB packed as a hex value 00RRGGBB
-                    hex_value = (r << 16) | (g << 8) | b
-                    f.write(f"{hex_value:06x}\n")
+                    # Write RGB bytes in little-endian order (BGR)
+                    f.write(bytes([r, g, b]))
                     
         elif psm == 0x13:  # GS_PSM_8 (8-bit grayscale)
             for y in range(height):
                 for x in range(width):
                     l = pixels[x, y]
-                    f.write(f"{l:02x}\n")
+                    # Write single byte for grayscale
+                    f.write(bytes([l]))
 
     @staticmethod
     def _load_clut_file(clut_file):

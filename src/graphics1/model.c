@@ -6,7 +6,7 @@
 #include <gs_psm.h>
 
 mesh_t* load_model(const char* filename) {
-    FILE* file = fopen(filename, "r");
+    FILE* file = fopen(filename, "rb");  // Changed from "r" to "rb" for binary reading
     if (!file) {
         perror("Failed to open file");
         return NULL;
@@ -27,7 +27,13 @@ mesh_t* load_model(const char* filename) {
     model->texture = NULL;
 
     // Read number of strips
-    fscanf(file, "%d", &model->strip_count);
+    if (fread(&model->strip_count, 4, 1, file) != 1) {  // Read 4-byte strip count
+        printf("Error: Failed to read strip count\n");
+        free_model(model);
+        fclose(file);
+        return NULL;
+    }
+    
     if (model->strip_count <= 0) {
         printf("Error: Invalid strip count in model file\n");
         free_model(model);
@@ -52,7 +58,13 @@ mesh_t* load_model(const char* filename) {
     // Read each strip
     for (int i = 0; i < model->strip_count; i++) {
         // Read strip length
-        fscanf(file, "%d", &model->strips[i].length);
+        if (fread(&model->strips[i].length, 4, 1, file) != 1) {  // Read 4-byte strip length
+            printf("Error: Failed to read strip length\n");
+            free_model(model);
+            fclose(file);
+            return NULL;
+        }
+        
         if (model->strips[i].length <= 0) {
             printf("Error: Invalid strip length in model file\n");
             free_model(model);
@@ -70,18 +82,22 @@ mesh_t* load_model(const char* filename) {
         }
 
         // Read all indices for this strip
-        for (int j = 0; j < model->strips[i].length; j++) {
-            if (fscanf(file, "%d", &model->strips[i].indices[j]) != 1) {
-                printf("Error: Failed to read strip index\n");
-                free_model(model);
-                fclose(file);
-                return NULL;
-            }
+        if (fread(model->strips[i].indices, 4, model->strips[i].length, file) != model->strips[i].length) {
+            printf("Error: Failed to read strip indices\n");
+            free_model(model);
+            fclose(file);
+            return NULL;
         }
     }
 
-    // Rest of the model loading remains mostly the same
-    fscanf(file, "%d", &model->vertex_count);
+    // Read vertex count
+    if (fread(&model->vertex_count, 4, 1, file) != 1) {
+        printf("Error: Failed to read vertex count\n");
+        free_model(model);
+        fclose(file);
+        return NULL;
+    }
+    
     if (model->vertex_count <= 0) {
         printf("Error: Invalid vertex count in model file\n");
         free_model(model);
@@ -89,7 +105,7 @@ mesh_t* load_model(const char* filename) {
         return NULL;
     }
 
-    // Continue with the rest of the file loading as before...
+    // Allocate memory for vertices
     model->vertices = (vertex_f_t*)memalign(16, model->vertex_count * sizeof(vertex_f_t));
     if (!model->vertices) {
         perror("Failed to allocate memory for vertices");
@@ -98,9 +114,12 @@ mesh_t* load_model(const char* filename) {
         return NULL;
     }
 
+    // Read vertices
     for (int i = 0; i < model->vertex_count; i++) {
-        if (fscanf(file, "%f,%f,%f,%f", &model->vertices[i].x, &model->vertices[i].y, 
-                  &model->vertices[i].z, &model->vertices[i].w) != 4) {
+        if (fread(&model->vertices[i].x, 4, 1, file) != 1 ||
+            fread(&model->vertices[i].y, 4, 1, file) != 1 ||
+            fread(&model->vertices[i].z, 4, 1, file) != 1 ||
+            fread(&model->vertices[i].w, 4, 1, file) != 1) {
             printf("Error: Failed to read vertex data\n");
             free_model(model);
             fclose(file);
@@ -108,7 +127,13 @@ mesh_t* load_model(const char* filename) {
         }
     }
 
-    fscanf(file, "%d", &model->color_count);
+    // Read color count
+    if (fread(&model->color_count, 4, 1, file) != 1) {
+        printf("Error: Failed to read color count\n");
+        free_model(model);
+        fclose(file);
+        return NULL;
+    }
     
     // Check if color count matches vertex count
     if (model->color_count != model->vertex_count) {
@@ -142,9 +167,12 @@ mesh_t* load_model(const char* filename) {
             return NULL;
         }
         
+        // Read colors
         for (int i = 0; i < model->color_count; i++) {
-            if (fscanf(file, "%f,%f,%f,%f", &model->colors[i].r, &model->colors[i].g, 
-                      &model->colors[i].b, &model->colors[i].a) != 4) {
+            if (fread(&model->colors[i].r, 4, 1, file) != 1 ||
+                fread(&model->colors[i].g, 4, 1, file) != 1 ||
+                fread(&model->colors[i].b, 4, 1, file) != 1 ||
+                fread(&model->colors[i].a, 4, 1, file) != 1) {
                 printf("Error: Failed to read color data\n");
                 free_model(model);
                 fclose(file);
@@ -153,8 +181,14 @@ mesh_t* load_model(const char* filename) {
         }
     }
     
-    // Read texture coordinates (texcoords)
-    fscanf(file, "%d", &model->texcoord_count);
+    // Read texture coordinate count
+    if (fread(&model->texcoord_count, 4, 1, file) != 1) {
+        printf("Error: Failed to read texture coordinate count\n");
+        free_model(model);
+        fclose(file);
+        return NULL;
+    }
+    
     if (model->texcoord_count > 0) {
         model->texcoords = (texel_f_t*)memalign(16, model->texcoord_count * sizeof(texel_f_t));
         if (!model->texcoords) {
@@ -164,9 +198,12 @@ mesh_t* load_model(const char* filename) {
             return NULL;
         }
         
+        // Read texture coordinates
         for (int i = 0; i < model->texcoord_count; i++) {
-            if (fscanf(file, "%f,%f,%f,%f", &model->texcoords[i].s, &model->texcoords[i].t, 
-                      &model->texcoords[i].r, &model->texcoords[i].q) != 4) {
+            if (fread(&model->texcoords[i].s, 4, 1, file) != 1 ||
+                fread(&model->texcoords[i].t, 4, 1, file) != 1 ||
+                fread(&model->texcoords[i].r, 4, 1, file) != 1 ||
+                fread(&model->texcoords[i].q, 4, 1, file) != 1) {
                 printf("Error: Failed to read texture coordinate data\n");
                 free_model(model);
                 fclose(file);
@@ -178,11 +215,28 @@ mesh_t* load_model(const char* filename) {
     }
     
     // Read texture data if present
-    // Try to read texture dimensions and format
-    int width, height, psm, texture_size;
-    u32 clut_id = 0;
-    if (fscanf(file, "%d,%d,%d,%d,%u", &width, &height, &psm, &texture_size, &clut_id) == 5) {
-        // Texture data is present with CLUT ID
+    // Try to read texture dimensions
+    int width, height;
+    if (fread(&width, 4, 1, file) != 1 || fread(&height, 4, 1, file) != 1) {
+        // If we can't read width/height, assume no texture
+        model->texture = NULL;
+    } else if (width == 0 || height == 0) {
+        // Zero width/height indicates no texture
+        model->texture = NULL;
+    } else {
+        // Texture is present, read the rest of the header
+        int psm, texture_size;
+        u32 clut_id;
+        
+        if (fread(&psm, 4, 1, file) != 1 || 
+            fread(&texture_size, 4, 1, file) != 1 ||
+            fread(&clut_id, 4, 1, file) != 1) {
+            printf("Error: Failed to read texture header\n");
+            free_model(model);
+            fclose(file);
+            return NULL;
+        }
+        
         model->texture = (texture_t*)memalign(16, sizeof(texture_t));
         if (!model->texture) {
             perror("Failed to allocate memory for texture structure");
@@ -195,7 +249,7 @@ mesh_t* load_model(const char* filename) {
         model->texture->height = height;
         model->texture->psm = psm;
         model->texture->texture_size = texture_size;
-        model->texture->clut_id = clut_id; // Store the CLUT ID
+        model->texture->clut_id = clut_id;
         
         printf("Loading texture with dimensions %dx%d, PSM=0x%02X, CLUT ID=0x%08X\n", 
                width, height, psm, clut_id);
@@ -209,132 +263,83 @@ mesh_t* load_model(const char* filename) {
             return NULL;
         }
         
-        // Read texture data depending on the PSM format
+        // Read texture data based on format
         if (psm == GS_PSM_32) { // GS_PSM_32 (32 bits per pixel)
-            unsigned int pixel;
             unsigned char* data = (unsigned char*)model->texture->texture_data;
-            int pos = 0;
             
             for (int i = 0; i < width * height; i++) {
-                if (fscanf(file, "%x", &pixel) != 1) {
+                unsigned char pixel[4];
+                if (fread(pixel, 1, 4, file) != 4) {
                     printf("Error: Failed to read texture data (32-bit format)\n");
                     free_model(model);
                     fclose(file);
                     return NULL;
                 }
                 
-                // Store RGBA components
-                data[pos++] = (pixel >> 16) & 0xFF;  // R
-                data[pos++] = (pixel >> 8) & 0xFF;   // G
-                data[pos++] = pixel & 0xFF;          // B
-                data[pos++] = (pixel >> 24) & 0xFF;  // A
+                // Store RGBA components (ABGR order from Python)
+                data[i*4]   = pixel[0];  // B
+                data[i*4+1] = pixel[1];  // G
+                data[i*4+2] = pixel[2];  // R
+                data[i*4+3] = pixel[3];  // A
             }
         } else if (psm == GS_PSM_24) { // GS_PSM_24 (24 bits per pixel)
-            unsigned int pixel;
             unsigned char* data = (unsigned char*)model->texture->texture_data;
-            int pos = 0;
             
             for (int i = 0; i < width * height; i++) {
-                if (fscanf(file, "%x", &pixel) != 1) {
+                unsigned char pixel[3];
+                if (fread(pixel, 1, 3, file) != 3) {
                     printf("Error: Failed to read texture data (24-bit format)\n");
                     free_model(model);
                     fclose(file);
                     return NULL;
                 }
                 
-                // Store RGB components (no alpha)
-                data[pos++] = (pixel >> 16) & 0xFF;  // R
-                data[pos++] = (pixel >> 8) & 0xFF;   // G
-                data[pos++] = pixel & 0xFF;          // B
+                // Store RGB components (BGR order from Python)
+                data[i*3]   = pixel[0];  // B
+                data[i*3+1] = pixel[1];  // G
+                data[i*3+2] = pixel[2];  // R
             }
-        } else if (psm == GS_PSM_16 || psm == GS_PSM_16S) { // GS_PSM_16 or GS_PSM_16S (16 bits per pixel)
-            unsigned short pixel;
-            unsigned short* data = (unsigned short*)model->texture->texture_data;
-            
-            for (int i = 0; i < width * height; i++) {
-                if (fscanf(file, "%hx", &pixel) != 1) {
-                    printf("Error: Failed to read texture data (16-bit format)\n");
-                    free_model(model);
-                    fclose(file);
-                    return NULL;
-                }
-                
-                data[i] = pixel;
-            }
-        } else if (psm == GS_PSM_8) { // GS_PSM_8 (8-bit indexed, requires CLUT)
-            u32 index;
+        } else if (psm == GS_PSM_8) { // GS_PSM_8 (8-bit indexed or grayscale)
             u8* data = (u8*)model->texture->texture_data;
             
-            for (int i = 0; i < width * height; i++) {
-                if (fscanf(file, "%x", &index) != 1) {
-                    printf("Error: Failed to read texture data (8-bit indexed format)\n");
-                    free_model(model);
-                    fclose(file);
-                    return NULL;
-                }
-                
-                // Ensure index is in range for 8-bit
-                if (index > 0xFF) {
-                    printf("Warning: 8-bit index out of range (%u), clamping to 255\n", index);
-                    index = 0xFF;
-                }
-
-
-                // Swizzle the index to match PS2 CLUT format for IDTEX8
-                
-                u8 high_nibble = index >> 4;
-                u8 low_nibble = index & 0x0F;
-
-                u8 row = (high_nibble >> 1) * 2 + (low_nibble >> 3);
-                u8 col = (high_nibble & 1) * 8 + (low_nibble & 7);
-                
-                data[i] = row * 16 + col;
-            }
-            
-            printf("Loaded 8-bit indexed texture with %d pixels\n", width * height);
-        } else if (psm == GS_PSM_4) { // GS_PSM_4 (4-bit indexed, requires CLUT)
-            unsigned int index;
-            unsigned char* data = (unsigned char*)model->texture->texture_data;
-            
-            // For 4-bit textures, we pack two indices per byte
-            for (int i = 0; i < width * height; i += 2) {
-                // Read first index
-                if (fscanf(file, "%x", &index) != 1) {
-                    printf("Error: Failed to read texture data (4-bit indexed format)\n");
-                    free_model(model);
-                    fclose(file);
-                    return NULL;
-                }
-                
-                // Ensure index is in range for 4-bit
-                if (index > 0xF) {
-                    printf("Warning: 4-bit index out of range (%u), clamping to 15\n", index);
-                    index = 0xF;
-                }
-                
-                // Store first index in the upper 4 bits
-                unsigned char packed = (index & 0xF) << 4;
-                
-                // If we have a second pixel, read and store it in lower 4 bits
-                if (i + 1 < width * height) {
-                    if (fscanf(file, "%x", &index) != 1) {
-                        printf("Error: Failed to read texture data (4-bit indexed format)\n");
+            if (clut_id != 0) {  // Indexed with CLUT
+                for (int i = 0; i < width * height; i++) {
+                    u8 index;
+                    if (fread(&index, 1, 1, file) != 1) {
+                        printf("Error: Failed to read texture data (8-bit indexed format)\n");
                         free_model(model);
                         fclose(file);
                         return NULL;
                     }
                     
-                    // Ensure index is in range for 4-bit
-                    if (index > 0xF) {
-                        printf("Warning: 4-bit index out of range (%u), clamping to 15\n", index);
-                        index = 0xF;
-                    }
+                    // Swizzle the index to match PS2 CLUT format for IDTEX8
+                    u8 high_nibble = index >> 4;
+                    u8 low_nibble = index & 0x0F;
                     
-                    // Pack second index in the lower 4 bits
-                    packed |= (index & 0xF);
+                    u8 row = (high_nibble >> 1) * 2 + (low_nibble >> 3);
+                    u8 col = (high_nibble & 1) * 8 + (low_nibble & 7);
+                    
+                    data[i] = row * 16 + col;
                 }
-                
-                data[i/2] = packed;
+                printf("Loaded 8-bit indexed texture with %d pixels\n", width * height);
+            } else {  // Grayscale (no CLUT)
+                if (fread(data, 1, width * height, file) != width * height) {
+                    printf("Error: Failed to read texture data (8-bit grayscale format)\n");
+                    free_model(model);
+                    fclose(file);
+                    return NULL;
+                }
+                printf("Loaded 8-bit grayscale texture with %d pixels\n", width * height);
+            }
+        } else if (psm == GS_PSM_4) { // GS_PSM_4 (4-bit indexed, requires CLUT)
+            unsigned char* data = (unsigned char*)model->texture->texture_data;
+            int bytes_to_read = (width * height + 1) / 2;  // Round up
+            
+            if (fread(data, 1, bytes_to_read, file) != bytes_to_read) {
+                printf("Error: Failed to read texture data (4-bit indexed format)\n");
+                free_model(model);
+                fclose(file);
+                return NULL;
             }
             
             printf("Loaded 4-bit indexed texture with %d pixels\n", width * height);
@@ -344,9 +349,6 @@ mesh_t* load_model(const char* filename) {
             free(model->texture);
             model->texture = NULL;
         }
-    } else {
-        // No texture data
-        model->texture = NULL;
     }
 
     print_mesh_data(model);
