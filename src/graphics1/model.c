@@ -40,7 +40,7 @@ mesh_t* load_model(const char* filename) {
         fclose(file);
         return NULL;
     }
-
+    printf("Number of strips: %d\n", model->strip_count);
     // Allocate memory for the strips array
     model->strips = (triangle_strip_t*)memalign(16, model->strip_count * sizeof(triangle_strip_t));
     if (!model->strips) {
@@ -276,10 +276,10 @@ mesh_t* load_model(const char* filename) {
                     return NULL;
                 }
                 
-                // Store RGBA components (ABGR order from Python)
-                data[i*4]   = pixel[0];  // B
+                // Store RGBA components
+                data[i*4]   = pixel[0];  // R
                 data[i*4+1] = pixel[1];  // G
-                data[i*4+2] = pixel[2];  // R
+                data[i*4+2] = pixel[2];  // B
                 data[i*4+3] = pixel[3];  // A
             }
         } else if (psm == GS_PSM_24) { // GS_PSM_24 (24 bits per pixel)
@@ -295,9 +295,9 @@ mesh_t* load_model(const char* filename) {
                 }
                 
                 // Store RGB components (BGR order from Python)
-                data[i*3]   = pixel[0];  // B
+                data[i*3]   = pixel[0];  // R
                 data[i*3+1] = pixel[1];  // G
-                data[i*3+2] = pixel[2];  // R
+                data[i*3+2] = pixel[2];  // B
             }
         } else if (psm == GS_PSM_8) { // GS_PSM_8 (8-bit indexed or grayscale)
             u8* data = (u8*)model->texture->texture_data;

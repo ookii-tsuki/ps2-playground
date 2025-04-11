@@ -3,6 +3,7 @@
 #include <graph.h>
 #include <kernel.h>
 #include <tamtypes.h>
+#include <debug.h>
 #include <draw.h>
 #include <dma.h>
 #include <dma_tags.h>
@@ -15,6 +16,7 @@
 #include <model.h>
 #include <clut.h>
 #include <texture_manager.h>
+#include <pad.h>
 
 #define PI 3.1415926
 
@@ -55,6 +57,7 @@ static render_object_t **objects;
 static int num_objects;
 
 static render_object_t *current_object;
+static int current_object_index;
 
 int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	
@@ -145,7 +148,7 @@ int load_models(const char **filenames, int count) {
 		return -1;
 	}
 
-	VECTOR pos = {0.0f, 0.f, 0.0f, 1.0f};
+	VECTOR pos = {0.0f, -1.0f, 0.0f, 1.0f};
 	VECTOR rot = {0.0f, 0.0f, 0.0f, 1.0f};
 	VECTOR scale = {1.0f, 1.0f, 1.0f, 1.0f};
 
@@ -155,7 +158,7 @@ int load_models(const char **filenames, int count) {
     prim.shading = PRIM_SHADE_GOURAUD;
     prim.mapping = DRAW_ENABLE;
     prim.fogging = DRAW_DISABLE;
-    prim.blending = DRAW_ENABLE;
+    prim.blending = DRAW_DISABLE;
     prim.antialiasing = DRAW_DISABLE;
     prim.mapping_type = PRIM_MAP_ST;
     prim.colorfix = PRIM_UNFIXED;
@@ -231,18 +234,22 @@ void set_current_object(int i) {
 
 	if (current_object) {
 		unload_texture_from_vram(current_object->texbuf);
-		free(current_object->texbuf);
 	}
 
 	current_object = objects[i];
 
+	printf("ahh");
 	texbuffer_t *texbuf = load_texture_in_vram(current_object->mesh->texture);
 
 	current_object->texbuf = texbuf;
 
+	printf("texbuf: %08X\n", (u32)current_object->texbuf->address);
+
 	clutbuffer_t *clutbuf = current_object->mesh->texture->clut_id > 0 ? current_object->clutbuf : &no_clut;
+	printf("clutbuf: %08X\n", (u32)clutbuf->address);
 
 	setup_texture(current_object->texbuf, clutbuf);
+
 }
 
 qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, camera_t *cam) {
@@ -301,10 +308,9 @@ qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, cam
 }
 
 
-
 int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
-	VECTOR cam_pos = {0.0f, 0.0f, 70.0f, 1.0f};
+	VECTOR cam_pos = {0.0f, 0.0f, 20.0f, 1.0f};
 	VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
 
     int ctx = 0;
@@ -343,8 +349,27 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
     dma_wait_fast();
 
 	qword_t *q;
+
     while (1)
     {
+		pad_update();
+	
+		scr_setXY(5, 5);
+		scr_printf("r/ps2");
+
+		//if (pad_get_button_down(0, PAD_R1)) {
+		//	current_object_index++;
+		//	if (current_object_index >= num_objects) {
+		//		current_object_index = 0;
+		//	}
+		//	printf("Current object: %d\n", current_object_index);
+		//	
+		//	set_current_object(current_object_index);
+		//}
+
+
+		float pad_left_x = pad_get_axis(0, AXIS_LEFT_X);
+
         current = packets[ctx];
         dmatag = current->data;
 
@@ -355,13 +380,12 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
 		// Clear framebuffer without any pixel testing.
 		q = draw_disable_tests(q, 0, zbuf);
-		q = draw_clear(q, 0, 2048.0f-(SCREEN_WIDTH/2), 2048.0f-(SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 0x30,0x30,0x30);
+		q = draw_clear(q, 0, 2048.0f-(SCREEN_WIDTH/2), 2048.0f-(SCREEN_HEIGHT/2), framebuf[ctx].width, framebuf[ctx].height, 0x00,0x00,0x00);
 		q = draw_enable_tests(q,0,zbuf);
 
 		DMATAG_CNT(dmatag, q-dmatag - 1, 0, 0, 0);
 
-		current_object->rotation[1] += 0.01f;
-		current_object->position[1] = sin(current_object->rotation[1] * 2.0f) * 0.1f;
+		current_object->rotation[1] += 0.04f * pad_left_x;
 
 		q = render_object(q, view_screen, current_object, &cam);
 
@@ -376,6 +400,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
         dma_channel_send_chain(DMA_CHANNEL_GIF, current->data, q - current->data, 0, 0);
 
         draw_wait_finish();
+
         graph_wait_vsync();
 
         graph_set_framebuffer_filtered(framebuf[ctx].address, framebuf[ctx].width, framebuf[ctx].psm, 0, 0);
@@ -406,11 +431,18 @@ int main(void) {
 
 	init_gs(framebuf, &zbuf);
 
+	// Initialize pad
+	printf("Initializing pad...\n");
+	if (pad_init() < 0) {
+		printf("FATAL: Failed to initialize pad\n");
+		return -1;
+	}
+
 	printf("Loading models...\n");
 	const char *model_filenames[] = {
-		"host:/car.bin",
-		"host:/car2.bin",
-		"host:/oiia.bin"
+		//"host:/car.bin",
+		"host:/kratos.bin",
+		//"host:/oiia.bin"
 	};
 
 	num_objects = sizeof(model_filenames) / sizeof(model_filenames[0]);
@@ -425,11 +457,11 @@ int main(void) {
 	printf("Loading texture...\n");
 
 	const char *clut_filenames[] = {
-		"host:/car.clt",
-		"host:/oiia.clt",
+		//"host:/car.clt",
+		"host:/kratos.clt",
 	};
 
-	l = load_cluts(clut_filenames, 2);
+	l = load_cluts(clut_filenames, 1);
 
 	if (l < 0) {
 		printf("FATAL: Failed to load CLUTs\n");
@@ -438,7 +470,8 @@ int main(void) {
 
 	printf("Drawing...\n");
 
-	set_current_object(1);
+	current_object_index = 0;
+	set_current_object(current_object_index);
 
 	draw(framebuf, &zbuf);
 
