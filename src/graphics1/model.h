@@ -8,6 +8,7 @@ typedef struct {
     int height;
     int psm;
     int texture_size; // Size of the texture data in bytes
+    u32 clut_id;      // Unique identifier for associated CLUT, 0 if none
     void* texture_data; // Pointer to raw texture data
 } __attribute__((packed,aligned(8))) texture_t;
 

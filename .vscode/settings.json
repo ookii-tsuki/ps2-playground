@@ -3,6 +3,8 @@
         "tamtypes.h": "c",
         "stdio.h": "c",
         "math3d.h": "c",
-        "math.h": "c"
+        "math.h": "c",
+        "graph_vram.h": "c",
+        "timer.h": "c"
     }
 }

@@ -3,6 +3,7 @@
 #include <graph.h>
 #include <kernel.h>
 #include <tamtypes.h>
+#include <debug.h>
 #include <draw.h>
 #include <dma.h>
 #include <dma_tags.h>
@@ -14,6 +15,8 @@
 #include <math.h>
 #include <model.h>
 #include <clut.h>
+#include <texture_manager.h>
+#include <pad.h>
 
 #define PI 3.1415926
 
@@ -22,10 +25,41 @@
 
 #define DRAWBUF_SIZE 20000
 
-#define MESH_FILE "host:car.bin"
-#define CLUT_FILE "host:car.clt"
 
-int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
+typedef struct {
+	VECTOR position;
+	VECTOR rotation;
+	VECTOR scale;
+	prim_t prim;
+	color_t rgbaq;
+	vertex_f_t *vertices;
+	xyz_t *screen_verts;
+	color_t *colors;
+	texel_t *st;
+	mesh_t *mesh;
+	texbuffer_t *texbuf;
+	clutbuffer_t *clutbuf;
+} __attribute__((aligned(16))) render_object_t;
+
+
+typedef struct
+{
+	VECTOR position;
+	VECTOR rotation;
+	float fov;
+	float near;
+	float far;
+	float aspect;
+} camera_t;
+
+
+static render_object_t **objects;
+static int num_objects;
+
+static render_object_t *current_object;
+static int current_object_index;
+
+int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 	
 	// allocate two framebuffers for double buffering
 	framebuf[0].width = framebuf[1].width = SCREEN_WIDTH;
@@ -41,11 +75,11 @@ int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
 	zbuf->enable = DRAW_ENABLE;
 	zbuf->mask = 0;
 	zbuf->method = ZTEST_METHOD_GREATER_EQUAL;
-	zbuf->zsm = GS_ZBUF_16;
+	zbuf->zsm = GS_ZBUF_24;
 	zbuf->address = graph_vram_allocate(framebuf->width, framebuf->height, zbuf->zsm, GRAPH_ALIGN_PAGE);
 
 	// set GS mode
-	graph_set_mode(GRAPH_MODE_NONINTERLACED, GRAPH_MODE_VGA_1024_60, GRAPH_MODE_FRAME, GRAPH_DISABLE);
+	graph_set_mode(GRAPH_MODE_INTERLACED, GRAPH_MODE_NTSC, GRAPH_MODE_FIELD, GRAPH_DISABLE);
 	graph_set_screen(0, 0, framebuf->width, framebuf->height);
 	graph_set_bgcolor(0, 0, 0);
 	graph_set_framebuffer_filtered(framebuf->address, framebuf->width, framebuf->psm, 0, 0);
@@ -73,98 +107,6 @@ int init_gs(framebuffer_t *framebuf, zbuffer_t *zbuf, texbuffer_t *texbuf) {
 }
 
 
-void load_texture(texbuffer_t *texbuf, clutbuffer_t *clutbuf, texture_t *texture, clut_t *clut) {
-    // Check if this is a CLUT texture
-    if (texture->psm == GS_PSM_4 || texture->psm == GS_PSM_8) {
-        // allocate video memory for the texture (indexed format uses less space)
-        texbuf->width = texture->width;
-        texbuf->psm = texture->psm;
-        texbuf->address = graph_vram_allocate(texture->width, texture->height, texbuf->psm, GRAPH_ALIGN_BLOCK);
-        
-		clutbuf->start = 0;
-		clutbuf->storage_mode = CLUT_STORAGE_MODE1;
-		clutbuf->load_method = CLUT_LOAD;
-		clutbuf->psm = GS_PSM_32;
-
-		int clut_width = texture->psm == GS_PSM_4 ? 8 : 16;
-		int clut_height = texture->psm == GS_PSM_4 ? 2 : 16;
-
-        // Allocate VRAM for the CLUT
-        clutbuf->address = graph_vram_allocate(clut_width, clut_height, clutbuf->psm, GRAPH_ALIGN_BLOCK);
-        
-        packet_t *packet = packet_init(50, PACKET_NORMAL);
-        qword_t *q = packet->data;
-        
-        // Transfer texture data (indexed pixels)
-        q = draw_texture_transfer(q, texture->texture_data, texture->width, texture->height, 
-                                  texbuf->psm, texbuf->address, texbuf->width);
-        
-        // Transfer CLUT data
-        q = draw_texture_transfer(q, clut->palette, clut_width, clut_height,
-                                 GS_PSM_32, clutbuf->address, 64);
-        
-        q = draw_texture_flush(q);
-        
-        dma_channel_send_chain(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
-        dma_wait_fast();
-        packet_free(packet);
-    } else {
-        texbuf->width = texture->width;
-        texbuf->psm = texture->psm;
-        texbuf->address = graph_vram_allocate(texture->width, texture->height, texbuf->psm, GRAPH_ALIGN_BLOCK);
-        
-		clutbuf->address = 0;
-		clutbuf->start = 0;
-		clutbuf->storage_mode = CLUT_STORAGE_MODE1;
-		clutbuf->load_method = CLUT_NO_LOAD;
-		clutbuf->psm = 0;
-
-        packet_t *packet = packet_init(50, PACKET_NORMAL);
-        qword_t *q = packet->data;
-        
-        q = draw_texture_transfer(q, texture->texture_data, texture->width, texture->height, 
-                                 texbuf->psm, texbuf->address, texbuf->width);
-        
-        q = draw_texture_flush(q);
-        
-        dma_channel_send_chain(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
-        dma_wait_fast();
-        packet_free(packet);
-        
-	}
-}
-
-void setup_texture(texbuffer_t *texbuf, clutbuffer_t *clutbuf) {
-	
-	packet_t *packet = packet_init(16, PACKET_NORMAL);
-
-	qword_t *q = packet->data;
-
-	lod_t lod;
-
-	lod.calculation = LOD_USE_K;
-	lod.max_level = 0;
-	lod.mag_filter = LOD_MAG_NEAREST;
-	lod.min_filter = LOD_MIN_NEAREST;
-	lod.l = 0;
-	lod.k = 0;
-
-	texbuf->info.width = draw_log2(texbuf->width);
-	texbuf->info.height = draw_log2(texbuf->width);
-	texbuf->info.components = TEXTURE_COMPONENTS_RGB;
-	texbuf->info.function = TEXTURE_FUNCTION_DECAL;
-
-
-	q = draw_texture_sampling(q, 0, &lod);
-
-	q = draw_texturebuffer(q, 0, texbuf, clutbuf);
-
-	dma_channel_send_normal(DMA_CHANNEL_GIF, packet->data, q - packet->data, 0, 0);
-
-	dma_wait_fast();
-
-	packet_free(packet);
-}
 
 void flip_frame_buffer(packet_t *flip,framebuffer_t *frame)
 {
@@ -180,31 +122,6 @@ void flip_frame_buffer(packet_t *flip,framebuffer_t *frame)
 	draw_wait_finish();
 
 }
-
-
-typedef struct {
-	VECTOR position;
-	VECTOR rotation;
-	VECTOR scale;
-	prim_t prim;
-	color_t rgbaq;
-	vertex_f_t *vertices;
-	xyz_t *screen_verts;
-	color_t *colors;
-	texel_t *st;
-	mesh_t *mesh;
-} __attribute__((aligned(16))) render_object_t;
-
-
-typedef struct
-{
-	VECTOR position;
-	VECTOR rotation;
-	float fov;
-	float near;
-	float far;
-	float aspect;
-} camera_t;
 
 
 
@@ -224,6 +141,117 @@ int allocate_render_object(render_object_t *obj, mesh_t *mesh) {
 	return 0;
 }
 
+int load_models(const char **filenames, int count) {
+	objects = malloc(sizeof(render_object_t*) * count);
+
+	if (!objects) {
+		return -1;
+	}
+
+	VECTOR pos = {0.0f, -1.0f, 0.0f, 1.0f};
+	VECTOR rot = {0.0f, 0.0f, 0.0f, 1.0f};
+	VECTOR scale = {1.0f, 1.0f, 1.0f, 1.0f};
+
+	prim_t prim;
+
+    prim.type = PRIM_TRIANGLE_STRIP;
+    prim.shading = PRIM_SHADE_GOURAUD;
+    prim.mapping = DRAW_ENABLE;
+    prim.fogging = DRAW_DISABLE;
+    prim.blending = DRAW_DISABLE;
+    prim.antialiasing = DRAW_DISABLE;
+    prim.mapping_type = PRIM_MAP_ST;
+    prim.colorfix = PRIM_UNFIXED;
+
+    color_t color = {
+        .r = 255,
+        .g = 255,
+        .b = 255,
+        .a = 255,
+        .q = 1.0f
+    };
+
+
+	for (int i = 0; i < count; i++) {
+		objects[i] = malloc(sizeof(render_object_t));
+
+		if (!objects[i]) {
+			return -1;
+		}
+
+		objects[i]->mesh = load_model(filenames[i]);
+
+		if (!objects[i]->mesh) {
+			return -1;
+		}
+
+		if (allocate_render_object(objects[i], objects[i]->mesh) < 0) {
+			return -1;
+		}
+
+		vector_copy(objects[i]->position, pos);
+		vector_copy(objects[i]->rotation, rot);
+		vector_copy(objects[i]->scale, scale);
+		objects[i]->prim = prim;
+		objects[i]->rgbaq = color;
+
+	}
+
+	return 0;
+}
+
+
+int load_cluts(const char **filenames, int count) {
+
+	for (int i = 0; i < count; i++) {
+		clut_t *clut = load_clut(filenames[i]);
+
+		if (!clut) {
+			return -1;
+		}
+
+		clutbuffer_t *clutbuf = load_clut_in_vram(clut);
+
+
+		for (int j = 0; j < num_objects; j++)
+		{
+			// compiler is doing weird shit here that makes comparison not work. volatile fixes it.
+			volatile u32 obj_clut_id = objects[j]->mesh->texture->clut_id;
+			volatile u32 clut_id = clut->id;
+
+			if (obj_clut_id == clut_id)
+			{
+				objects[j]->clutbuf = clutbuf;
+			}
+		}
+
+	}
+
+	return 0;
+}
+
+void set_current_object(int i) {
+
+	if (current_object) {
+		unload_texture_from_vram(current_object->texbuf);
+	}
+
+	current_object = objects[i];
+
+	printf("ahh");
+	texbuffer_t *texbuf = load_texture_in_vram(current_object->mesh->texture);
+
+	current_object->texbuf = texbuf;
+
+	printf("texbuf: %08X\n", (u32)current_object->texbuf->address);
+
+	clutbuffer_t *clutbuf = current_object->mesh->texture->clut_id > 0 ? current_object->clutbuf : &no_clut;
+	printf("clutbuf: %08X\n", (u32)clutbuf->address);
+
+	setup_texture(current_object->texbuf, clutbuf);
+
+}
+
 qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, camera_t *cam) {
 
 	MATRIX local_world, world_view, local_screen;
@@ -241,7 +269,7 @@ qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, cam
 
 	calculate_vertices((VECTOR*)obj->vertices, obj->mesh->vertex_count, (VECTOR*)obj->mesh->vertices, local_screen);
 
-	draw_convert_xyz(obj->screen_verts, 2048, 2048, 16, obj->mesh->vertex_count, obj->vertices);
+	draw_convert_xyz(obj->screen_verts, 2048, 2048, 24, obj->mesh->vertex_count, obj->vertices);
 
 	draw_convert_rgbq(obj->colors, obj->mesh->vertex_count, obj->vertices, obj->mesh->colors, 255);
 
@@ -280,14 +308,9 @@ qword_t *render_object(qword_t *q, MATRIX view_screen, render_object_t *obj, cam
 }
 
 
+int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
 
-int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
-    
-	VECTOR pos = {0.0f, 0.0f, 0.0f, 1.0f};
-	VECTOR rot = {0.0f, 0.0f, 0.0f, 1.0f};
-	VECTOR scale = {1.0f, 1.0f, 1.0f, 1.0f};
-
-	VECTOR cam_pos = {0.0f, 0.0f, 80.0f, 1.0f};
+	VECTOR cam_pos = {0.0f, 0.0f, 20.0f, 1.0f};
 	VECTOR cam_rot = {0.0f, 0.0f, 0.0f, 1.0f};
 
     int ctx = 0;
@@ -301,37 +324,11 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 
     MATRIX view_screen;
 
-	render_object_t obj;
 	camera_t cam;
-
-    prim_t prim;
-
-    prim.type = PRIM_TRIANGLE_STRIP;
-    prim.shading = PRIM_SHADE_GOURAUD;
-    prim.mapping = DRAW_ENABLE;
-    prim.fogging = DRAW_DISABLE;
-    prim.blending = DRAW_ENABLE;
-    prim.antialiasing = DRAW_DISABLE;
-    prim.mapping_type = PRIM_MAP_ST;
-    prim.colorfix = PRIM_UNFIXED;
-
-    color_t color = {
-        .r = 255,
-        .g = 255,
-        .b = 255,
-        .a = 255,
-        .q = 1.0f
-    };
 
     packet_t *flip = packet_init(3, PACKET_UCAB);
 
-	allocate_render_object(&obj, mesh);
 
-	vector_copy(obj.position, pos);
-	vector_copy(obj.rotation, rot);
-	vector_copy(obj.scale, scale);
-	obj.prim = prim;
-	obj.rgbaq = color;
 
 	cam.aspect = graph_aspect_ratio();
 	cam.fov = 60.0f;
@@ -352,8 +349,27 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
     dma_wait_fast();
 
 	qword_t *q;
+
     while (1)
     {
+		pad_update();
+	
+		scr_setXY(5, 5);
+		scr_printf("r/ps2");
+
+		//if (pad_get_button_down(0, PAD_R1)) {
+		//	current_object_index++;
+		//	if (current_object_index >= num_objects) {
+		//		current_object_index = 0;
+		//	}
+		//	printf("Current object: %d\n", current_object_index);
+		//	
+		//	set_current_object(current_object_index);
+		//}
+
+
+		float pad_left_x = pad_get_axis(0, AXIS_LEFT_X);
+
         current = packets[ctx];
         dmatag = current->data;
 
@@ -369,9 +385,9 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
 
 		DMATAG_CNT(dmatag, q-dmatag - 1, 0, 0, 0);
 
-		obj.rotation[1] += 0.01f;
+		current_object->rotation[1] += 0.04f * pad_left_x;
 
-		q = render_object(q, view_screen, &obj, &cam);
+		q = render_object(q, view_screen, current_object, &cam);
 
 		dmatag = q;
 		q++;
@@ -384,6 +400,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
         dma_channel_send_chain(DMA_CHANNEL_GIF, current->data, q - current->data, 0, 0);
 
         draw_wait_finish();
+
         graph_wait_vsync();
 
         graph_set_framebuffer_filtered(framebuf[ctx].address, framebuf[ctx].width, framebuf[ctx].psm, 0, 0);
@@ -399,6 +416,7 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf, mesh_t *mesh) {
     return 0;
 }
 
+
 int main(void) {
 
 	printf("Initializing DMAC GIF channel...\n");
@@ -410,32 +428,53 @@ int main(void) {
 
 	framebuffer_t framebuf[2];
 	zbuffer_t zbuf;
-	texbuffer_t texbuf;
-	clutbuffer_t clutbuf;
 
-	init_gs(framebuf, &zbuf, &texbuf);
+	init_gs(framebuf, &zbuf);
 
-	printf("Loading model...\n");
-	mesh_t *mesh = load_model(MESH_FILE);
+	// Initialize pad
+	printf("Initializing pad...\n");
+	if (pad_init() < 0) {
+		printf("FATAL: Failed to initialize pad\n");
+		return -1;
+	}
 
+	printf("Loading models...\n");
+	const char *model_filenames[] = {
+		//"host:/car.bin",
+		"host:/kratos.bin",
+		//"host:/oiia.bin"
+	};
+
+	num_objects = sizeof(model_filenames) / sizeof(model_filenames[0]);
 	
-	if (!mesh) {
-		printf("FATAL: Failed to load model\n");
+	int l = load_models(model_filenames, num_objects);
+	
+	if (l < 0) {
+		printf("FATAL: Failed to load models\n");
 		return -1;
 	}
 
 	printf("Loading texture...\n");
 
-	clut_t *clut = load_clut(CLUT_FILE);
+	const char *clut_filenames[] = {
+		//"host:/car.clt",
+		"host:/kratos.clt",
+	};
 
-	load_texture(&texbuf, &clutbuf, mesh->texture, clut);
-	setup_texture(&texbuf, &clutbuf);
+	l = load_cluts(clut_filenames, 1);
+
+	if (l < 0) {
+		printf("FATAL: Failed to load CLUTs\n");
+		return -1;
+	}
 
 	printf("Drawing...\n");
 
-	draw(framebuf, &zbuf, mesh);
+	current_object_index = 0;
+	set_current_object(current_object_index);
 
-	free_model(mesh);
+	draw(framebuf, &zbuf);
+
 
 	return 0;
 }
