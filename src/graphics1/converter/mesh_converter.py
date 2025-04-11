@@ -384,15 +384,15 @@ class PS2ModelGenerator:
                 # Write 4 floating-point values (r,g,b,a)
                 for value in color:
                     f.write(struct.pack('<f', float(value)))
-                    print(f"Val: {value}")
-                print(f"Color: {color}")
+
             
             # Write aligned texture coordinates
             f.write(len(data['texcoords']).to_bytes(4, byteorder='little'))  # Texcoord count
             for texcoord in data['texcoords']:
-                # Ensure coordinates are in 0-1 range
-                s = max(0.0, min(1.0, texcoord[0]))
-                t = max(0.0, min(1.0, texcoord[1]))
+
+                s = texcoord[0] % 1
+                t = texcoord[1] % 1
+                print(f"Texcoord: {s}, {t}")    
                 # Flip Y coordinate for PS2
                 t_flipped = 1.0 - t
                 # Write as 4 floating point values (s,t,0,0)
