@@ -204,6 +204,7 @@ int load_models(const char **filenames, int count) {
 int load_cluts(const char **filenames, int count) {
 
 	for (int i = 0; i < count; i++) {
+
 		clut_t *clut = load_clut(filenames[i]);
 
 		if (!clut) {
@@ -212,14 +213,12 @@ int load_cluts(const char **filenames, int count) {
 
 		clutbuffer_t *clutbuf = load_clut_in_vram(clut);
 
-
+		u32 clut_id = clut->id;
+		
 		for (int j = 0; j < num_objects; j++)
 		{
-			// compiler is doing weird shit here that makes comparison not work. volatile fixes it.
-			volatile u32 obj_clut_id = objects[j]->mesh->texture->clut_id;
-			volatile u32 clut_id = clut->id;
 
-			if (obj_clut_id == clut_id)
+			if (objects[j]->mesh->texture->clut_id == clut_id)
 			{
 				objects[j]->clutbuf = clutbuf;
 			}
@@ -353,19 +352,17 @@ int draw(framebuffer_t *framebuf, zbuffer_t *zbuf) {
     while (1)
     {
 		pad_update();
-	
-		scr_setXY(5, 5);
-		scr_printf("r/ps2");
 
-		//if (pad_get_button_down(0, PAD_R1)) {
-		//	current_object_index++;
-		//	if (current_object_index >= num_objects) {
-		//		current_object_index = 0;
-		//	}
-		//	printf("Current object: %d\n", current_object_index);
-		//	
-		//	set_current_object(current_object_index);
-		//}
+
+		if (pad_get_button_down(0, PAD_R1)) {
+			current_object_index++;
+			if (current_object_index >= num_objects) {
+				current_object_index = 0;
+			}
+			printf("Current object: %d\n", current_object_index);
+			
+			set_current_object(current_object_index);
+		}
 
 
 		float pad_left_x = pad_get_axis(0, AXIS_LEFT_X);
@@ -440,7 +437,7 @@ int main(void) {
 
 	printf("Loading models...\n");
 	const char *model_filenames[] = {
-		//"host:/car.bin",
+		"host:/spyro.bin",
 		"host:/kratos.bin",
 		//"host:/oiia.bin"
 	};
@@ -457,11 +454,11 @@ int main(void) {
 	printf("Loading texture...\n");
 
 	const char *clut_filenames[] = {
-		//"host:/car.clt",
+		"host:/spyro.clt",
 		"host:/kratos.clt",
 	};
 
-	l = load_cluts(clut_filenames, 1);
+	l = load_cluts(clut_filenames, sizeof(clut_filenames) / sizeof(clut_filenames[0]));
 
 	if (l < 0) {
 		printf("FATAL: Failed to load CLUTs\n");
